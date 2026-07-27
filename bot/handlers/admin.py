@@ -52,6 +52,28 @@ async def admin_panel(message: types.Message):
     await message.answer(admin_text)
 
 
+@router.message(Command("clearallsubs"))
+async def admin_clear_all_subs(message: types.Message):
+    """Admin: expire ALL subscriptions in the database immediately."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    async with async_session_factory() as db:
+        all_subs = (await db.execute(select(Subscription))).scalars().all()
+        count = len(all_subs)
+        for sub in all_subs:
+            sub.status = "EXPIRED"
+            sub.expires_at = datetime.utcnow()
+        await db.commit()
+
+    await message.answer(
+        f"🗑 <b>All Subscriptions Cleared</b>\n\n"
+        f"<b>{count}</b> subscription(s) have been expired.\n"
+        f"All users are now ungated — they must subscribe to access features."
+    )
+
+
 @router.message(Command("mysub"))
 async def my_subscription(message: types.Message):
     """Check your own subscription status."""

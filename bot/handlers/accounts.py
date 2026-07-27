@@ -11,7 +11,10 @@ from services.mtproto_service import mtproto_service
 from bot.keyboards.inline import get_account_manage_keyboard
 from bot.keyboards.main_menu import get_main_menu_keyboard, get_cancel_keyboard
 
+from telethon.errors import PhoneCodeInvalidError, PhoneCodeExpiredError
+
 logger = logging.getLogger(__name__)
+
 
 router = Router()
 
@@ -105,7 +108,8 @@ async def process_otp(message: types.Message, state: FSMContext):
         await message.answer("🏠 Returned to main menu.", reply_markup=get_main_menu_keyboard())
         return
 
-    code = message.text.strip()
+    # Clean code string: remove spaces, dashes, invisible zero-width spaces
+    code = message.text.strip().replace(" ", "").replace("-", "").replace("\u200b", "")
     data = await state.get_data()
     phone = data.get("phone")
     phone_code_hash = data.get("phone_code_hash")
@@ -125,7 +129,7 @@ async def process_otp(message: types.Message, state: FSMContext):
             await state.set_state(AddAccountStates.waiting_for_2fa)
             await message.answer(
                 "<b>🔐 Two-Factor Authentication (2FA) Required</b>\n\n"
-                "Enter your 2FA password:\n\n"
+                "Your account has 2FA enabled. Please enter your 2FA password:\n\n"
                 "Tap <b>🔙 Back to Main Menu</b> to cancel.",
                 reply_markup=get_cancel_keyboard()
             )
@@ -134,17 +138,35 @@ async def process_otp(message: types.Message, state: FSMContext):
         await save_account_session(message.from_user.id, phone, final_session_str)
         await state.clear()
         await message.answer(
-            f"✅ Account <code>{phone}</code> connected successfully!",
+            f"🎉 <b>Account Connected!</b>\n\n"
+            f"Telegram account <code>{phone}</code> connected successfully!",
             reply_markup=get_main_menu_keyboard()
         )
 
-    except Exception as e:
-        logger.error(f"Error verifying OTP: {e}")
+    except PhoneCodeInvalidError:
         await message.answer(
-            f"❌ Invalid OTP code: {str(e)}",
+            "❌ <b>Invalid OTP Code!</b>\n\n"
+            "The verification code you entered was incorrect or has been superseded by a newer code.\n\n"
+            "📩 Please check your Telegram app for the <b>latest code</b> and type it below:",
+            reply_markup=get_cancel_keyboard()
+        )
+        # Keep user in waiting_for_otp state so they can re-type without starting over
+    except PhoneCodeExpiredError:
+        await message.answer(
+            "❌ <b>OTP Code Expired!</b>\n\n"
+            "The code expired. Please tap <b>➕ Add Account</b> to request a fresh verification code.",
             reply_markup=get_main_menu_keyboard()
         )
         await state.clear()
+    except Exception as e:
+        logger.error(f"Error verifying OTP: {e}")
+        await message.answer(
+            f"❌ <b>Verification Error:</b> {str(e)}\n\n"
+            f"Please tap <b>➕ Add Account</b> to try again.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        await state.clear()
+
 
 
 @router.message(AddAccountStates.waiting_for_2fa)

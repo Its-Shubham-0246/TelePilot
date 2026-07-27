@@ -73,20 +73,3 @@ def get_account_msg_config_keyboard(account_id: int, auto_group_enabled: bool) -
     )
 
 
-def get_mode_selection_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="📢 Auto Group Messaging", callback_data="mode_AUTO_GROUP"),
-            ],
-            [
-                InlineKeyboardButton(text="💬 Auto DM (Intended)", callback_data="mode_AUTO_DM"),
-            ],
-            [
-                InlineKeyboardButton(text="⚡ Both (Group + DM)", callback_data="mode_BOTH"),
-            ],
-            [
-                InlineKeyboardButton(text="🔙 Back", callback_data="back_to_main"),
-            ],
-        ]
-    )

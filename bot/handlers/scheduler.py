@@ -1,7 +1,5 @@
 import asyncio
 from aiogram import Router, F, types
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
 
 from core.database import async_session_factory
@@ -10,15 +8,12 @@ from models.schedule import Schedule
 from models.account import TelegramAccount
 from services.scheduler_service import scheduler_service
 from services.subscription_service import subscription_service
-from bot.keyboards.inline import get_mode_selection_keyboard, get_subscription_plans_keyboard
-from bot.keyboards.main_menu import get_main_menu_keyboard, get_cancel_keyboard
+from bot.keyboards.inline import get_subscription_plans_keyboard
+from bot.keyboards.main_menu import get_main_menu_keyboard
 
 router = Router()
 
 
-class ScheduleSetupStates(StatesGroup):
-    waiting_for_targets = State()
-    waiting_for_interval = State()
 
 
 @router.message(F.text == "⏰ Scheduler")

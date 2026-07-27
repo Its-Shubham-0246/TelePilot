@@ -1,4 +1,4 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -42,10 +42,3 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def get_back_inline_button() -> InlineKeyboardMarkup:
-    """Simple inline Back button for inline menus."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Back to Main Menu", callback_data="back_to_main")]
-        ]
-    )

@@ -110,6 +110,7 @@ async def verify_payment_callback(callback: types.CallbackQuery):
     async with async_session_factory() as db:
         user = (await db.execute(select(User).where(User.telegram_id == callback.from_user.id))).scalars().first()
         if not user:
+            await callback.answer("User profile not found. Type /start first.", show_alert=True)
             return
 
         # Find latest pending payment
@@ -117,18 +118,43 @@ async def verify_payment_callback(callback: types.CallbackQuery):
         pay = (await db.execute(stmt)).scalars().first()
 
         if not pay:
-            await callback.answer("No pending payment found.", show_alert=True)
+            # Check if user already has active sub
+            active_sub = await subscription_service.get_active_subscription(db, user.id)
+            if active_sub:
+                await callback.answer("✅ Your subscription is already ACTIVE!", show_alert=True)
+            else:
+                await callback.answer("No pending payment found. Please select a plan above to buy.", show_alert=True)
             return
 
-        # Auto-verify simulation / confirmation
-        pay.status = "VERIFIED"
-        await db.commit()
+        # Query Razorpay API directly if transaction ID exists
+        is_paid = False
+        if pay.gateway_transaction_id:
+            try:
+                from services.razorpay_service import razorpay_service
+                link_info = razorpay_service.fetch_payment_link(pay.gateway_transaction_id)
+                status = link_info.get("status", "")
+                if status in ["paid", "partially_paid"]:
+                    is_paid = True
+            except Exception as err:
+                logger.error(f"Error checking Razorpay link status: {err}")
 
-        # Grant subscription
-        sub = await subscription_service.add_or_renew_subscription(db, user.id, pay.plan_duration_days, pay.id)
+        if is_paid:
+            pay.status = "VERIFIED"
+            await db.commit()
 
-    await callback.message.answer(
-        f"🎉 <b>Payment Verified!</b>\n\n"
-        f"Your <b>{sub.plan_name}</b> subscription is now active until {sub.expires_at.strftime('%Y-%m-%d')}!"
-    )
-    await callback.answer()
+            # Grant subscription
+            sub = await subscription_service.add_or_renew_subscription(db, user.id, pay.plan_duration_days, pay.id)
+
+            await callback.message.answer(
+                f"🎉 <b>Payment Verified!</b>\n\n"
+                f"Your <b>{sub.plan_name}</b> subscription is now active until {sub.expires_at.strftime('%d %b %Y, %I:%M %p UTC')}!\n\n"
+                f"You can now access all features. Enjoy! 🚀"
+            )
+            await callback.answer("✅ Payment verified successfully!")
+        else:
+            await callback.answer(
+                "⏳ Payment not completed yet.\n\n"
+                "Please complete the payment using the link provided and tap this button again.",
+                show_alert=True
+            )
+

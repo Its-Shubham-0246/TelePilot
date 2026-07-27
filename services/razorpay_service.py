@@ -80,5 +80,14 @@ class RazorpayService:
             logger.error("Razorpay webhook signature verification failed.")
             return False
 
+    def fetch_payment_link(self, link_id: str) -> Dict[str, Any]:
+        """Fetches details & status of a Razorpay Payment Link."""
+        try:
+            return self.client.payment_link.fetch(link_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch Razorpay payment link {link_id}: {e}")
+            return {}
+
+
 
 razorpay_service = RazorpayService()

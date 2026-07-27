@@ -10,7 +10,11 @@ class Settings(BaseSettings):
     TELEGRAM_API_HASH: str = "0123456789abcdef0123456789abcdef"
     
     # Secret Key for AES-256 Fernet Session Encryption
-    ENCRYPTION_SECRET_KEY: str = Fernet.generate_key().decode()
+    # MUST be set as a fixed Railway env var — generate once with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # WARNING: Changing this key will invalidate all saved Telegram sessions!
+    ENCRYPTION_SECRET_KEY: str = ""
+
     
     # Database URL (AsyncPG)
     DATABASE_URL: str = "sqlite+aiosqlite:///./telegram_saas.db"

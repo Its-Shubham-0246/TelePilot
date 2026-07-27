@@ -5,6 +5,7 @@ from core.database import init_db
 from config import settings
 from bot.bot_instance import bot, dp
 from bot.handlers import setup_routers
+from bot.middleware import SubscriptionGateMiddleware
 from services.scheduler_service import scheduler_service
 from api.main import app as fastapi_app
 
@@ -17,6 +18,8 @@ logger = logging.getLogger("telegram_saas_app")
 
 async def start_bot():
     logger.info("Initializing Telegram Bot...")
+    # Register subscription gate middleware
+    dp.message.middleware(SubscriptionGateMiddleware())
     main_router = setup_routers()
     dp.include_router(main_router)
     # Start polling

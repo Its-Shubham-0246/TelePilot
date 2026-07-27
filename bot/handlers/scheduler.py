@@ -7,8 +7,6 @@ from models.user import User
 from models.schedule import Schedule
 from models.account import TelegramAccount
 from services.scheduler_service import scheduler_service
-from services.subscription_service import subscription_service
-from bot.keyboards.inline import get_subscription_plans_keyboard
 from bot.keyboards.main_menu import get_main_menu_keyboard
 
 router = Router()
@@ -24,19 +22,9 @@ async def show_scheduler_menu(message: types.Message):
             await message.answer("Please type /start first.")
             return
 
-        has_sub = await subscription_service.check_user_has_active_sub(db, user.id)
         sched = (await db.execute(select(Schedule).where(Schedule.user_id == user.id))).scalars().first()
         stmt_acc = select(TelegramAccount).where(TelegramAccount.user_id == user.id, TelegramAccount.auto_group_enabled == True)
         enabled_accs = (await db.execute(stmt_acc)).scalars().all()
-
-    if not has_sub:
-        await message.answer(
-            "⚠️ <b>Active Subscription Required!</b>\n\n"
-            "You need an active subscription plan to configure and launch TelePilot auto-messaging.\n"
-            "Please select a subscription plan below to get started:",
-            reply_markup=get_subscription_plans_keyboard()
-        )
-        return
 
     status_text = "▶️ Running" if (sched and sched.is_active) else "⏸ Stopped / Paused"
     enabled_count = len(enabled_accs)
@@ -60,17 +48,7 @@ async def start_automation(message: types.Message):
         if not user:
             return
 
-        # 1. STRICT SUBSCRIPTION ENFORCEMENT
-        has_sub = await subscription_service.check_user_has_active_sub(db, user.id)
-        if not has_sub:
-            await message.answer(
-                "🔒 <b>Active Subscription Required!</b>\n\n"
-                "You do not have an active TelePilot subscription. Please choose a plan below to activate auto-messaging:",
-                reply_markup=get_subscription_plans_keyboard()
-            )
-            return
-
-        # 2. Check user accounts
+        # Check user accounts
         stmt_all = select(TelegramAccount).where(
             TelegramAccount.user_id == user.id,
             TelegramAccount.is_active == True

@@ -27,7 +27,7 @@ class SchedulerService:
             self.scheduler.add_job(
                 self.process_active_schedules,
                 'interval',
-                minutes=1,
+                seconds=30,
                 id='master_schedule_runner',
                 replace_existing=True
             )
@@ -59,7 +59,7 @@ class SchedulerService:
             await db.commit()
             return
 
-        # 2. Fetch enabled user accounts (don't filter by status here — we handle it below)
+        # 2. Fetch enabled user accounts
         stmt_acc = select(TelegramAccount).where(
             TelegramAccount.user_id == schedule.user_id,
             TelegramAccount.is_active == True,
@@ -111,36 +111,20 @@ class SchedulerService:
                 logger.error(f"[Scheduler] {account.phone_number} — session decrypt failed (encryption key changed?), skipping")
                 continue
 
-            logger.info(f"[Scheduler] Running broadcast for {account.phone_number}")
+            # Mark last_used_at BEFORE running broadcast so timer starts immediately
+            account.last_used_at = now
+            await db.commit()
 
-            # 3. Fetch all joined groups
-            try:
-                joined_groups = await mtproto_service.fetch_joined_groups(session_str)
-            except Exception as e:
-                logger.error(f"[Scheduler] fetch_joined_groups failed for {account.phone_number}: {e}")
-                account.last_used_at = now
-                await db.commit()
-                continue
+            logger.info(f"[Scheduler] Starting single-connection broadcast for {account.phone_number}")
 
-            if not joined_groups:
-                logger.info(f"[Scheduler] {account.phone_number} — not in any groups")
-                account.last_used_at = now
-                await db.commit()
-                continue
-
-            logger.info(f"[Scheduler] {account.phone_number} — broadcasting to {len(joined_groups)} group(s)")
-
-            # 4. Broadcast message to all joined groups
+            # 3. Single-connection broadcast to all joined groups
             variants = [v.strip() for v in message_text.split("---") if v.strip()] or [message_text]
-            for group_entity, group_title in joined_groups:
-                success, log_msg, flood_seconds = await mtproto_service.send_message_to_target(
-                    session_str=session_str,
-                    target_chat=group_entity,
-                    message_variants=variants,
-                    delay_seconds=3
-                )
+            broadcast_results = await mtproto_service.broadcast_to_account_groups(
+                session_str=session_str,
+                message_variants=variants
+            )
 
-                # Log result
+            for group_title, success, log_msg, flood_seconds in broadcast_results:
                 job_log = JobLog(
                     schedule_id=schedule.id,
                     account_id=account.id,
@@ -154,13 +138,13 @@ class SchedulerService:
                 if flood_seconds:
                     account.status = "FLOOD_WAIT"
                     account.rate_limit_until = datetime.utcnow() + timedelta(seconds=flood_seconds)
-                    logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s — pausing")
+                    logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s — pausing account")
                     break
 
-            account.last_used_at = datetime.utcnow()
             await db.commit()
-            logger.info(f"[Scheduler] Broadcast complete for {account.phone_number}")
+            logger.info(f"[Scheduler] Broadcast completed for {account.phone_number}")
 
 
 scheduler_service = SchedulerService()
+
 

@@ -112,6 +112,82 @@ class MTProtoService:
 
 
 
+    async def broadcast_to_account_groups(
+        self,
+        session_str: str,
+        message_variants: List[str],
+        media_url: Optional[str] = None,
+        delay_between_groups: float = 1.5
+    ) -> List[Tuple[str, bool, str, Optional[int]]]:
+        """
+        Connects once via MTProto session, fetches joined groups, and broadcasts messages with inter-group delay.
+        Returns list of (group_title, success, log_msg, flood_wait_seconds).
+        """
+        if not message_variants:
+            return []
+
+        session = StringSession(session_str)
+        client = TelegramClient(session, self.api_id, self.api_hash)
+        results = []
+
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                logger.error("Session unauthorized during broadcast.")
+                return [("All Groups", False, "Session expired or user unauthorized.", None)]
+
+            groups = []
+            async for dialog in client.iter_dialogs():
+                if dialog.is_group:
+                    groups.append((dialog.entity, dialog.name or str(dialog.id)))
+
+            if not groups:
+                logger.info("No joined groups found for session.")
+                return []
+
+            logger.info(f"Found {len(groups)} joined groups. Starting single-connection broadcast...")
+
+            for index, (group_entity, group_title) in enumerate(groups):
+                if index > 0:
+                    jitter = random.uniform(0.5, 1.5)
+                    await asyncio.sleep(delay_between_groups + jitter)
+
+                message_text = random.choice(message_variants)
+                try:
+                    if media_url:
+                        await client.send_file(group_entity, media_url, caption=message_text)
+                    else:
+                        await client.send_message(group_entity, message_text)
+
+                    results.append((group_title, True, f"Message sent successfully to {group_title}", None))
+
+                except FloodWaitError as e:
+                    logger.warning(f"FloodWait on group '{group_title}': retry in {e.seconds}s")
+                    results.append((group_title, False, f"FloodWait limit hit: retry in {e.seconds}s", e.seconds))
+                    break  # Stop further sending for this account on FloodWait
+
+                except (UserBannedInChannelError, ChatWriteForbiddenError) as e:
+                    logger.warning(f"Permission denied on group '{group_title}': {e}")
+                    results.append((group_title, False, f"Permission denied: {e}", None))
+
+                except Exception as e:
+                    logger.error(f"Failed sending to group '{group_title}': {e}")
+                    results.append((group_title, False, f"Error: {str(e)}", None))
+
+            return results
+
+        except (UserDeactivatedError, AuthKeyInvalidError) as e:
+            logger.error(f"Account session revoked/invalidated: {e}")
+            return [("All Groups", False, f"Account session revoked: {e}", None)]
+        except Exception as e:
+            logger.error(f"Broadcast exception: {e}")
+            return [("All Groups", False, f"Error broadcasting: {str(e)}", None)]
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
     async def fetch_joined_groups(self, session_str: str) -> List[Tuple[any, str]]:
         """
         Fetches all joined groups and supergroups for an account.
@@ -132,7 +208,10 @@ class MTProtoService:
             logger.error(f"Error fetching dialogs: {e}")
             return []
         finally:
-            await client.disconnect()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
     async def send_message_to_target(
         self,
@@ -186,6 +265,7 @@ class MTProtoService:
 
         finally:
             await client.disconnect()
+
 
 
 mtproto_service = MTProtoService()

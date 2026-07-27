@@ -92,11 +92,13 @@ async def process_phone(message: types.Message, state: FSMContext):
         await state.set_state(AddAccountStates.waiting_for_otp)
         await message.answer(
             "<b>📩 Enter Verification Code</b>\n\n"
-            f"A code was sent to <code>{phone}</code>.\n"
-            "Please enter the code:\n\n"
+            f"A code was sent to <code>{phone}</code>.\n\n"
+            "⚠️ <b>Important:</b> To prevent Telegram from auto-expiring your code, please type it with spaces or hyphens:\n"
+            "👉 Example: If your code is <code>71556</code>, type: <b><code>7 1 5 5 6</code></b> (or <code>7-1-5-5-6</code>)\n\n"
             "Tap <b>🔙 Back to Main Menu</b> to cancel.",
             reply_markup=get_cancel_keyboard()
         )
+
     except Exception as e:
         logger.error(f"Error sending OTP: {e}")
         await message.answer(
@@ -151,11 +153,13 @@ async def process_otp(message: types.Message, state: FSMContext):
     except (PhoneCodeInvalidError, PhoneCodeExpiredError):
         await message.answer(
             "❌ <b>Invalid or Expired OTP Code!</b>\n\n"
-            "The verification code entered was invalid or expired.\n\n"
-            "📩 Please check your Telegram app for the <b>latest code</b> and type it below:\n"
+            "Telegram may have auto-expired the code because it was typed without spaces.\n\n"
+            "📩 Please check your Telegram app for the <b>latest code</b> and type it with spaces:\n"
+            "👉 Example: <b><code>7 1 5 5 6</code></b>\n\n"
             "<i>(Or tap <b>➕ Add Account</b> to request a fresh code)</i>",
             reply_markup=get_cancel_keyboard()
         )
+
         # Keep user in waiting_for_otp state so they can re-type the latest code directly
 
     except Exception as e:

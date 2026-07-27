@@ -143,21 +143,16 @@ async def process_otp(message: types.Message, state: FSMContext):
             reply_markup=get_main_menu_keyboard()
         )
 
-    except PhoneCodeInvalidError:
+    except (PhoneCodeInvalidError, PhoneCodeExpiredError):
         await message.answer(
-            "❌ <b>Invalid OTP Code!</b>\n\n"
-            "The verification code you entered was incorrect or has been superseded by a newer code.\n\n"
-            "📩 Please check your Telegram app for the <b>latest code</b> and type it below:",
+            "❌ <b>Invalid or Expired OTP Code!</b>\n\n"
+            "The verification code entered was invalid or expired.\n\n"
+            "📩 Please check your Telegram app for the <b>latest code</b> and type it below:\n"
+            "<i>(Or tap <b>➕ Add Account</b> to request a fresh code)</i>",
             reply_markup=get_cancel_keyboard()
         )
-        # Keep user in waiting_for_otp state so they can re-type without starting over
-    except PhoneCodeExpiredError:
-        await message.answer(
-            "❌ <b>OTP Code Expired!</b>\n\n"
-            "The code expired. Please tap <b>➕ Add Account</b> to request a fresh verification code.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        await state.clear()
+        # Keep user in waiting_for_otp state so they can re-type the latest code directly
+
     except Exception as e:
         logger.error(f"Error verifying OTP: {e}")
         await message.answer(

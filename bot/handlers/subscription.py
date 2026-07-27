@@ -123,20 +123,31 @@ async def verify_payment_callback(callback: types.CallbackQuery):
             if active_sub:
                 await callback.answer("✅ Your subscription is already ACTIVE!", show_alert=True)
             else:
-                await callback.answer("No pending payment found. Please select a plan above to buy.", show_alert=True)
+                await callback.answer("❌ No pending payment order found. Please select a plan above to buy.", show_alert=True)
             return
 
-        # Query Razorpay API directly if transaction ID exists
+        if not pay.gateway_transaction_id:
+            await callback.answer(
+                "❌ Payment link ID missing. Please tap on a subscription plan above to generate a new payment link.",
+                show_alert=True
+            )
+            return
+
+        # Query Razorpay API directly to verify actual payment status
         is_paid = False
-        if pay.gateway_transaction_id:
-            try:
-                from services.razorpay_service import razorpay_service
-                link_info = razorpay_service.fetch_payment_link(pay.gateway_transaction_id)
-                status = link_info.get("status", "")
-                if status in ["paid", "partially_paid"]:
-                    is_paid = True
-            except Exception as err:
-                logger.error(f"Error checking Razorpay link status: {err}")
+        status_text = "unknown"
+        try:
+            from services.razorpay_service import razorpay_service
+            link_info = razorpay_service.fetch_payment_link(pay.gateway_transaction_id)
+            status_text = link_info.get("status", "unknown")
+            amount_paid = link_info.get("amount_paid", 0)
+            target_amount = link_info.get("amount", 0)
+
+            # Check if status is paid OR if full amount in paise was received
+            if status_text == "paid" or (target_amount > 0 and amount_paid >= target_amount):
+                is_paid = True
+        except Exception as err:
+            logger.error(f"Error querying Razorpay API for link {pay.gateway_transaction_id}: {err}")
 
         if is_paid:
             pay.status = "VERIFIED"
@@ -146,15 +157,16 @@ async def verify_payment_callback(callback: types.CallbackQuery):
             sub = await subscription_service.add_or_renew_subscription(db, user.id, pay.plan_duration_days, pay.id)
 
             await callback.message.answer(
-                f"🎉 <b>Payment Verified!</b>\n\n"
+                f"🎉 <b>Payment Verified Successfully!</b>\n\n"
                 f"Your <b>{sub.plan_name}</b> subscription is now active until {sub.expires_at.strftime('%d %b %Y, %I:%M %p UTC')}!\n\n"
-                f"You can now access all features. Enjoy! 🚀"
+                f"You now have full access to all TelePilot features 🚀"
             )
-            await callback.answer("✅ Payment verified successfully!")
+            await callback.answer("✅ Payment verified!")
         else:
             await callback.answer(
-                "⏳ Payment not completed yet.\n\n"
-                "Please complete the payment using the link provided and tap this button again.",
+                f"❌ Payment Not Detected! (Razorpay Status: {status_text.upper()})\n\n"
+                f"Please complete your payment via the link provided above before clicking verify.",
                 show_alert=True
             )
+
 

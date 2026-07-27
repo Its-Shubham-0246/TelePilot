@@ -7,10 +7,9 @@ from models.subscription import Subscription
 from models.user import User
 
 PRICING_PLANS: Dict[int, Dict[str, any]] = {
-    30: {"name": "30 Days Plan", "days": 30, "price": 299, "currency": "INR"},
-    90: {"name": "90 Days Plan", "days": 90, "price": 699, "currency": "INR"},
-    180: {"name": "180 Days Plan", "days": 180, "price": 1199, "currency": "INR"},
-    365: {"name": "365 Days Plan", "days": 365, "price": 1999, "currency": "INR"},
+    1:  {"name": "1 Day Plan",   "days": 1,  "price": 49,  "currency": "INR"},
+    7:  {"name": "7 Days Plan",  "days": 7,  "price": 199, "currency": "INR"},
+    30: {"name": "30 Days Plan", "days": 30, "price": 399, "currency": "INR"},
 }
 
 

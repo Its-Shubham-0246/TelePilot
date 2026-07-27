@@ -36,10 +36,9 @@ async def show_subscription(message: types.Message):
         info = (
             f"<b>💳 SaaS Subscription Plans</b>\n\n"
             f"Get full access to Telegram Multi-Account Automation:\n"
-            f"• 30 Days – <b>₹299</b>\n"
-            f"• 90 Days – <b>₹699</b>\n"
-            f"• 180 Days – <b>₹1,199</b>\n"
-            f"• 365 Days – <b>₹1,999</b>\n\n"
+            f"• 1 Day – <b>₹49</b>\n"
+            f"• 7 Days – <b>₹199</b>\n"
+            f"• 30 Days – <b>₹399</b>\n\n"
             f"Select a plan below to purchase:"
         )
 

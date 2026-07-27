@@ -5,12 +5,11 @@ def get_subscription_plans_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="30 Days – ₹299", callback_data="buy_sub_30"),
-                InlineKeyboardButton(text="90 Days – ₹699", callback_data="buy_sub_90"),
+                InlineKeyboardButton(text="1 Day – ₹49", callback_data="buy_sub_1"),
+                InlineKeyboardButton(text="7 Days – ₹199", callback_data="buy_sub_7"),
             ],
             [
-                InlineKeyboardButton(text="180 Days – ₹1,199", callback_data="buy_sub_180"),
-                InlineKeyboardButton(text="365 Days – ₹1,999", callback_data="buy_sub_365"),
+                InlineKeyboardButton(text="30 Days – ₹399", callback_data="buy_sub_30"),
             ],
             [
                 InlineKeyboardButton(text="🔄 Verify Payment", callback_data="verify_payment"),
@@ -20,6 +19,7 @@ def get_subscription_plans_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
 
 
 def get_account_manage_keyboard(account_id: int, is_active: bool) -> InlineKeyboardMarkup:

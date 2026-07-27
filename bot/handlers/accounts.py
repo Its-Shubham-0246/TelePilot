@@ -28,8 +28,13 @@ class AddAccountStates(StatesGroup):
 # ── Back / Cancel handler (works in any FSM state) ──────────────────────────
 @router.message(F.text == "🔙 Back to Main Menu")
 async def cancel_to_main(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    phone = data.get("phone")
+    if phone:
+        await mtproto_service.cancel_pending_login(phone)
     await state.clear()
     await message.answer("🏠 Returned to main menu.", reply_markup=get_main_menu_keyboard())
+
 
 
 # ── Add Account ──────────────────────────────────────────────────────────────
@@ -178,7 +183,8 @@ async def process_2fa(message: types.Message, state: FSMContext):
 
     await message.answer("⏳ Verifying 2FA password...")
     try:
-        final_session_str = await mtproto_service.sign_in_2fa(password, temp_session_str)
+        final_session_str = await mtproto_service.sign_in_2fa(phone, password, temp_session_str)
+
         await save_account_session(message.from_user.id, phone, final_session_str)
         await state.clear()
         await message.answer(

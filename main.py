@@ -39,9 +39,11 @@ async def start_api():
 
 
 async def main():
-    logger.info("Starting Telegram SaaS System...")
+    db_type = "PostgreSQL" if "postgresql" in settings.DATABASE_URL or "postgres" in settings.DATABASE_URL else "SQLite"
+    logger.info(f"Starting Telegram SaaS System... (DB Engine: {db_type})")
     # Initialize Database tables
     await init_db()
+
 
     # Start APScheduler background engine
     scheduler_service.start()

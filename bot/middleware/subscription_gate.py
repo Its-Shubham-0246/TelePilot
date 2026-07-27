@@ -57,10 +57,18 @@ class SubscriptionGateMiddleware(BaseMiddleware):
             user = user_result.scalars().first()
 
             if not user:
-                await event.answer(
-                    "Please send /start first to register your account."
+                from config import settings
+                is_admin = event.from_user.id in settings.admin_ids_list
+                user = User(
+                    telegram_id=event.from_user.id,
+                    username=event.from_user.username,
+                    full_name=event.from_user.full_name,
+                    is_admin=is_admin
                 )
-                return
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+
 
             has_sub = await subscription_service.check_user_has_active_sub(db, user.id)
 

@@ -27,97 +27,89 @@ class MTProtoService:
     def __init__(self, api_id: int = None, api_hash: str = None):
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
-        self.pending_clients: Dict[str, TelegramClient] = {}
 
-    async def cancel_pending_login(self, phone_number: str):
-        """Disconnects and cleans up any active pending login client for phone_number."""
-        client = self.pending_clients.pop(phone_number, None)
-        if client:
+    async def send_login_code(self, phone_number: str) -> Tuple[str, str]:
+        """
+        Initiates Telegram sign-in for phone_number.
+        Returns (phone_code_hash, temp_session_string).
+        """
+        logger.info(f"[OTP] Sending login code to {phone_number}")
+        session = StringSession()
+        client = TelegramClient(session, self.api_id, self.api_hash)
+        try:
+            await client.connect()
+            logger.info(f"[OTP] Connected to DC{client.session.dc_id} for {phone_number}")
+            sent_code = await client.send_code_request(phone_number)
+            session_str = client.session.save()
+            logger.info(f"[OTP] Code sent to {phone_number} | hash={sent_code.phone_code_hash[:8]}... | DC={client.session.dc_id}")
+            return sent_code.phone_code_hash, session_str
+        except Exception as e:
+            logger.error(f"[OTP] send_login_code failed for {phone_number}: {type(e).__name__}: {e}")
+            raise
+        finally:
             try:
                 await client.disconnect()
             except Exception:
                 pass
 
-    async def send_login_code(self, phone_number: str) -> Tuple[str, str]:
-        """
-        Initiates Telegram sign-in for phone_number.
-        Keeps the client connected while waiting for OTP.
-        Returns (phone_code_hash, temp_session_string).
-        """
-        # Cleanup any previous attempt for this phone
-        await self.cancel_pending_login(phone_number)
-
-        session = StringSession()
-        client = TelegramClient(session, self.api_id, self.api_hash)
-        await client.connect()
-        try:
-            sent_code = await client.send_code_request(phone_number)
-            session_str = client.session.save()
-            # Keep client active in memory so MTProto connection stays open for sign_in
-            self.pending_clients[phone_number] = client
-            return sent_code.phone_code_hash, session_str
-        except Exception as e:
-            await client.disconnect()
-            raise e
-
     async def sign_in_code(
         self, phone_number: str, code: str, phone_code_hash: str, temp_session_str: str
     ) -> Tuple[str, bool]:
         """
-        Submits OTP code over the active MTProto connection.
+        Submits OTP code using the saved session string.
         Returns (final_session_string, requires_2fa).
         """
-        client = self.pending_clients.get(phone_number)
-        created_fresh = False
-
-        if not client or not client.is_connected():
-            session = StringSession(temp_session_str)
-            client = TelegramClient(session, self.api_id, self.api_hash)
-            await client.connect()
-            created_fresh = True
-
+        logger.info(f"[OTP] sign_in_code for {phone_number} | code='{code}' | hash={phone_code_hash[:8]}...")
+        session = StringSession(temp_session_str)
+        client = TelegramClient(session, self.api_id, self.api_hash)
         try:
+            await client.connect()
+            logger.info(f"[OTP] Reconnected to DC{client.session.dc_id} for {phone_number}")
             try:
                 await client.sign_in(phone=phone_number, code=code, phone_code_hash=phone_code_hash)
                 final_session = client.session.save()
-                await self.cancel_pending_login(phone_number)
+                logger.info(f"[OTP] sign_in SUCCESS for {phone_number}")
                 return final_session, False
             except SessionPasswordNeededError:
                 temp_session = client.session.save()
-                # Keep client active in pending_clients for 2FA step
-                self.pending_clients[phone_number] = client
+                logger.info(f"[OTP] 2FA required for {phone_number}")
                 return temp_session, True
         except Exception as e:
-            if created_fresh:
+            logger.error(f"[OTP] sign_in_code FAILED for {phone_number}: {type(e).__name__}: {e}")
+            raise
+        finally:
+            try:
                 await client.disconnect()
-            else:
-                # Keep active client connected in case user re-types code
+            except Exception:
                 pass
-            raise e
 
     async def sign_in_2fa(self, phone_number: str, password: str, temp_session_str: str) -> str:
         """
-        Submits 2FA password over the active MTProto connection.
-        Returns final_session_string.
+        Submits 2FA password. Returns final_session_string.
         """
-        client = self.pending_clients.get(phone_number)
-        created_fresh = False
-
-        if not client or not client.is_connected():
-            session = StringSession(temp_session_str)
-            client = TelegramClient(session, self.api_id, self.api_hash)
-            await client.connect()
-            created_fresh = True
-
+        logger.info(f"[OTP] sign_in_2fa for {phone_number}")
+        session = StringSession(temp_session_str)
+        client = TelegramClient(session, self.api_id, self.api_hash)
         try:
+            await client.connect()
             await client.sign_in(password=password)
             final_session = client.session.save()
-            await self.cancel_pending_login(phone_number)
+            logger.info(f"[OTP] 2FA SUCCESS for {phone_number}")
             return final_session
         except Exception as e:
-            if created_fresh:
+            logger.error(f"[OTP] sign_in_2fa FAILED for {phone_number}: {type(e).__name__}: {e}")
+            raise
+        finally:
+            try:
                 await client.disconnect()
-            raise e
+            except Exception:
+                pass
+
+    async def cancel_pending_login(self, phone_number: str):
+        """No-op kept for compatibility."""
+        pass
+
+
 
 
     async def fetch_joined_groups(self, session_str: str) -> List[Tuple[any, str]]:

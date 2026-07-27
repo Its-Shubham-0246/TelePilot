@@ -150,17 +150,13 @@ async def process_otp(message: types.Message, state: FSMContext):
             reply_markup=get_main_menu_keyboard()
         )
 
-    except (PhoneCodeInvalidError, PhoneCodeExpiredError):
-        await message.answer(
-            "❌ <b>Invalid or Expired OTP Code!</b>\n\n"
-            "Telegram may have auto-expired the code because it was typed without spaces.\n\n"
-            "📩 Please check your Telegram app for the <b>latest code</b> and type it with spaces:\n"
-            "👉 Example: <b><code>7 1 5 5 6</code></b>\n\n"
-            "<i>(Or tap <b>➕ Add Account</b> to request a fresh code)</i>",
-            reply_markup=get_cancel_keyboard()
-        )
+    except PhoneCodeInvalidError:
+        logger.warning(f"[OTP] PhoneCodeInvalidError for {phone} — auto-resending fresh code")
+        await _auto_resend_code(message, state, phone, reason="❌ <b>Code was invalid.</b>")
 
-        # Keep user in waiting_for_otp state so they can re-type the latest code directly
+    except PhoneCodeExpiredError:
+        logger.warning(f"[OTP] PhoneCodeExpiredError for {phone} — auto-resending fresh code")
+        await _auto_resend_code(message, state, phone, reason="⏰ <b>Code expired.</b>")
 
     except Exception as e:
         logger.error(f"Error verifying OTP: {e}")
@@ -170,6 +166,31 @@ async def process_otp(message: types.Message, state: FSMContext):
             reply_markup=get_main_menu_keyboard()
         )
         await state.clear()
+
+
+async def _auto_resend_code(message: types.Message, state: FSMContext, phone: str, reason: str):
+    """Automatically requests a fresh OTP and updates FSM with the new hash/session."""
+    try:
+        new_hash, new_session = await mtproto_service.send_login_code(phone)
+        await state.update_data(phone_code_hash=new_hash, temp_session_str=new_session)
+        await state.set_state(AddAccountStates.waiting_for_otp)
+        await message.answer(
+            f"{reason}\n\n"
+            "🔄 <b>A fresh code has been sent to your Telegram!</b>\n\n"
+            "⚠️ <b>IMPORTANT — Type it with spaces to avoid expiry:</b>\n"
+            "If your code is <code>71556</code> → type: <b><code>7 1 5 5 6</code></b>\n\n"
+            "Tap <b>🔙 Back to Main Menu</b> to cancel.",
+            reply_markup=get_cancel_keyboard()
+        )
+    except Exception as resend_err:
+        logger.error(f"[OTP] Auto-resend failed for {phone}: {resend_err}")
+        await message.answer(
+            "❌ Could not resend code. Please tap <b>➕ Add Account</b> to try again.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        await state.clear()
+
+
 
 
 

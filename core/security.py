@@ -1,21 +1,22 @@
 import base64
-from cryptography.fernet import Fernet
+import logging
+from cryptography.fernet import Fernet, InvalidToken
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _get_fernet() -> Fernet:
     key = settings.ENCRYPTION_SECRET_KEY.encode('utf-8')
-    # If the key is not a valid 32-byte url-safe base64 string, derive one deterministically
     try:
         return Fernet(key)
     except Exception:
-        # Fallback to base64 encoding/padding if standard raw string provided
         key_32 = base64.urlsafe_b64encode(key.ljust(32)[:32])
         return Fernet(key_32)
 
 
 def encrypt_session_string(session_str: str) -> str:
-    """Encrypt a Telethon/Pyrogram StringSession token at rest."""
+    """Encrypt a Telethon StringSession token at rest."""
     if not session_str:
         return ""
     fernet = _get_fernet()
@@ -24,9 +25,14 @@ def encrypt_session_string(session_str: str) -> str:
 
 
 def decrypt_session_string(encrypted_session: str) -> str:
-    """Decrypt an encrypted StringSession token back to plain text."""
+    """Decrypt an encrypted StringSession token. Returns empty string on any failure."""
     if not encrypted_session:
         return ""
-    fernet = _get_fernet()
-    decrypted_bytes = fernet.decrypt(encrypted_session.encode('utf-8'))
-    return decrypted_bytes.decode('utf-8')
+    try:
+        fernet = _get_fernet()
+        decrypted_bytes = fernet.decrypt(encrypted_session.encode('utf-8'))
+        return decrypted_bytes.decode('utf-8')
+    except (InvalidToken, Exception) as e:
+        logger.error(f"Session decryption failed — key mismatch or corrupted token: {e}")
+        return ""
+

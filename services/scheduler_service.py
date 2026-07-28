@@ -27,7 +27,7 @@ class SchedulerService:
             self.scheduler.add_job(
                 self.process_active_schedules,
                 'interval',
-                seconds=30,
+                seconds=5,
                 id='master_schedule_runner',
                 replace_existing=True
             )
@@ -91,13 +91,15 @@ class SchedulerService:
                 logger.info(f"[Scheduler] {account.phone_number} status={account.status} — skipping")
                 continue
 
-            # Check interval timer
+            # Check interval timer with 2-second grace threshold so exact minute timers fire right on time
             if account.last_used_at:
-                minutes_since_last = (now - account.last_used_at).total_seconds() / 60.0
-                if minutes_since_last < account.interval_minutes:
-                    remaining = round(account.interval_minutes - minutes_since_last, 1)
-                    logger.info(f"[Scheduler] {account.phone_number} — interval not reached ({remaining}m left)")
+                seconds_since_last = (now - account.last_used_at).total_seconds()
+                required_seconds = account.interval_minutes * 60 - 2
+                if seconds_since_last < required_seconds:
+                    remaining_mins = round((account.interval_minutes * 60 - seconds_since_last) / 60.0, 1)
+                    logger.info(f"[Scheduler] {account.phone_number} — interval not reached ({remaining_mins}m left)")
                     continue
+
 
             # Check message is configured
             message_text = account.custom_message

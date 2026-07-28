@@ -73,3 +73,26 @@ def get_account_msg_config_keyboard(account_id: int, auto_group_enabled: bool) -
     )
 
 
+def get_timer_preset_keyboard(account_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⚡ 1 min", callback_data=f"set_timer_val_{account_id}_1"),
+                InlineKeyboardButton(text="⏱ 2 min", callback_data=f"set_timer_val_{account_id}_2"),
+                InlineKeyboardButton(text="⏱ 5 min", callback_data=f"set_timer_val_{account_id}_5"),
+                InlineKeyboardButton(text="⏱ 10 min", callback_data=f"set_timer_val_{account_id}_10"),
+            ],
+            [
+                InlineKeyboardButton(text="⏱ 30 min", callback_data=f"set_timer_val_{account_id}_30"),
+                InlineKeyboardButton(text="⌛ 1 hr", callback_data=f"set_timer_val_{account_id}_60"),
+                InlineKeyboardButton(text="⌛ 2 hr", callback_data=f"set_timer_val_{account_id}_120"),
+                InlineKeyboardButton(text="⌛ 5 hr", callback_data=f"set_timer_val_{account_id}_300"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back to Account Config", callback_data=f"acc_msg_cfg_{account_id}"),
+            ],
+        ]
+    )
+
+
+

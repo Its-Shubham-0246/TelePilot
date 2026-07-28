@@ -51,18 +51,23 @@ class SchedulerService:
     async def process_active_schedules(self):
         """Iterates over active schedules and runs group broadcasts for enabled accounts."""
         try:
+            # Step 1: Collect active schedule IDs using a short-lived session
             async with async_session_factory() as db:
                 stmt = select(Schedule).where(Schedule.is_active == True)
                 result = await db.execute(stmt)
-                schedules = result.scalars().all()
+                schedule_ids = [s.id for s in result.scalars().all()]
 
-                for sched in schedules:
-                    try:
-                        await self._execute_schedule_job(db, sched)
-                    except Exception as e:
-                        logger.error(f"[Scheduler] Error processing schedule #{sched.id}: {e}")
+            # Step 2: Process each schedule with its OWN fresh session to avoid shared state issues
+            for sched_id in schedule_ids:
+                try:
+                    async with async_session_factory() as job_db:
+                        sched = await job_db.get(Schedule, sched_id)
+                        if sched and sched.is_active:
+                            await self._execute_schedule_job(job_db, sched)
+                except Exception as e:
+                    logger.error(f"[Scheduler] Error on schedule #{sched_id}: {type(e).__name__}: {e}", exc_info=True)
         except Exception as e:
-            logger.error(f"[Scheduler] process_active_schedules exception: {e}")
+            logger.error(f"[Scheduler] process_active_schedules failed: {type(e).__name__}: {e}", exc_info=True)
 
     async def _execute_schedule_job(self, db, schedule: Schedule):
         # 0. Get user for notifications

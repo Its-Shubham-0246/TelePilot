@@ -113,7 +113,7 @@ class SchedulerService:
                     logger.info(f"[Scheduler] {account.phone_number} FloodWait {wait_left}m left — skipping")
                     continue
 
-            # Skip banned/broken accounts
+            # Skip banned/broken accounts (these are permanent until user re-logins)
             if account.status in ("BANNED", "RE_LOGIN_REQUIRED"):
                 logger.info(f"[Scheduler] {account.phone_number} status={account.status} — skipping")
                 continue
@@ -127,20 +127,13 @@ class SchedulerService:
                     logger.info(f"[Scheduler] {account.phone_number} — {remaining_mins}m until next send")
                     continue
 
-            # Check message is configured
+            # Check message is configured — skip silently (don't spam user with notifications)
             message_text = account.custom_message
             if not message_text:
-                logger.warning(f"[Scheduler] {account.phone_number} — no message set, skipping")
-                if user_telegram_id:
-                    await _notify_user(
-                        user_telegram_id,
-                        f"⚠️ <b>No Message Configured!</b>\n\n"
-                        f"Account <code>{account.phone_number}</code> has no message set.\n\n"
-                        f"Tap <b>💬 Messages</b> → select the account → <b>📝 Set / Edit Message</b>"
-                    )
+                logger.info(f"[Scheduler] {account.phone_number} — no message set, skipping silently")
                 continue
 
-            # Get decrypted session
+            # Get decrypted session — if it fails, notify ONCE and mark RE_LOGIN_REQUIRED
             try:
                 session_str = account.get_session_string()
             except Exception as decrypt_err:
@@ -149,13 +142,14 @@ class SchedulerService:
 
             if not session_str:
                 logger.error(f"[Scheduler] {account.phone_number} — session invalid (needs re-login)")
+                # Only notify once: after this, status = RE_LOGIN_REQUIRED so this block never runs again
                 account.status = "RE_LOGIN_REQUIRED"
                 await db.commit()
                 if user_telegram_id:
                     await _notify_user(
                         user_telegram_id,
                         f"🔴 <b>Account Needs Re-Login!</b>\n\n"
-                        f"The session for <code>{account.phone_number}</code> is invalid or expired.\n\n"
+                        f"The session for <code>{account.phone_number}</code> has expired or is invalid.\n\n"
                         f"Please:\n"
                         f"1️⃣ Tap <b>👤 My Accounts</b>\n"
                         f"2️⃣ Find this account → <b>🗑 Remove Account</b>\n"
@@ -177,33 +171,16 @@ class SchedulerService:
                     message_variants=variants
                 )
             except Exception as broadcast_err:
-                logger.error(f"[Scheduler] broadcast_to_account_groups failed for {account.phone_number}: {broadcast_err}")
-                if user_telegram_id:
-                    await _notify_user(
-                        user_telegram_id,
-                        f"❌ <b>Broadcast Error</b>\n\n"
-                        f"Account <code>{account.phone_number}</code> failed to broadcast:\n"
-                        f"<code>{str(broadcast_err)[:200]}</code>\n\n"
-                        f"Auto-messaging will retry on next interval."
-                    )
+                logger.error(f"[Scheduler] broadcast failed for {account.phone_number}: {broadcast_err}")
                 continue
 
             if not broadcast_results:
                 logger.info(f"[Scheduler] {account.phone_number} — no groups found or session unauthorized")
-                if user_telegram_id:
-                    await _notify_user(
-                        user_telegram_id,
-                        f"⚠️ <b>No Groups Found</b>\n\n"
-                        f"Account <code>{account.phone_number}</code> is not a member of any Telegram groups, "
-                        f"or the session has expired.\n\n"
-                        f"If you recently joined groups, wait a moment and click <b>▶️ Start</b> again."
-                    )
                 continue
 
             # Log results and handle flood wait
             sent_count = 0
             failed_count = 0
-            flood_hit = False
             for group_title, success, log_msg, flood_seconds in broadcast_results:
                 job_log = JobLog(
                     schedule_id=schedule.id,
@@ -220,22 +197,22 @@ class SchedulerService:
                     failed_count += 1
 
                 if flood_seconds:
+                    # Only notify once: after this, status = FLOOD_WAIT so this block never runs again
                     account.status = "FLOOD_WAIT"
                     account.rate_limit_until = datetime.utcnow() + timedelta(seconds=flood_seconds)
-                    flood_hit = True
                     logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s")
                     if user_telegram_id:
                         wait_mins = round(flood_seconds / 60, 1)
                         await _notify_user(
                             user_telegram_id,
-                            f"⏳ <b>Rate Limited!</b>\n\n"
+                            f"⏳ <b>Rate Limited by Telegram!</b>\n\n"
                             f"Account <code>{account.phone_number}</code> hit Telegram's rate limit.\n"
                             f"Auto-messaging paused for <b>{wait_mins} minute(s)</b> and will resume automatically."
                         )
                     break
 
             await db.commit()
-            logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count} flood={flood_hit}")
+            logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count}")
 
 
 scheduler_service = SchedulerService()

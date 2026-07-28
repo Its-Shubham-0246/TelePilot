@@ -1,15 +1,24 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from services.subscription_service import get_active_pricing, is_sale_active
 
 
 def get_subscription_plans_keyboard() -> InlineKeyboardMarkup:
+    plans = get_active_pricing()
+    sale = is_sale_active()
+    badge = "🔥 " if sale else ""
+
+    p1  = plans[1]["price"]
+    p7  = plans[7]["price"]
+    p30 = plans[30]["price"]
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="1 Day – ₹49", callback_data="buy_sub_1"),
-                InlineKeyboardButton(text="7 Days – ₹199", callback_data="buy_sub_7"),
+                InlineKeyboardButton(text=f"{badge}1 Day – ₹{p1}",   callback_data="buy_sub_1"),
+                InlineKeyboardButton(text=f"{badge}7 Days – ₹{p7}",  callback_data="buy_sub_7"),
             ],
             [
-                InlineKeyboardButton(text="30 Days – ₹399", callback_data="buy_sub_30"),
+                InlineKeyboardButton(text=f"{badge}30 Days – ₹{p30}", callback_data="buy_sub_30"),
             ],
             [
                 InlineKeyboardButton(text="🔄 Verify Payment", callback_data="verify_payment"),

@@ -22,21 +22,70 @@ async def show_subscription(message: types.Message):
             await message.answer("Please type /start first.")
             return
 
+        # Check for active subscription first
         sub = await subscription_service.get_active_subscription(db, user.id)
 
+        # If no active sub, check if they had a previous expired one
+        expired_sub = None
+        if not sub:
+            from sqlalchemy import desc
+            from models.subscription import Subscription as SubModel
+            last_sub_result = await db.execute(
+                select(SubModel)
+                .where(SubModel.user_id == user.id)
+                .order_by(desc(SubModel.expires_at))
+                .limit(1)
+            )
+            expired_sub = last_sub_result.scalars().first()
+
     if sub:
-        days_left = (sub.expires_at - datetime.utcnow()).days
+        # Active subscription
+        time_left = sub.expires_at - datetime.utcnow()
+        days_left = time_left.days
+        hours_left = int(time_left.total_seconds() // 3600)
+
+        if days_left >= 1:
+            remaining_str = f"{days_left} Day(s)"
+        elif hours_left > 0:
+            remaining_str = f"⚠️ {hours_left} Hour(s) — Expiring soon!"
+        else:
+            remaining_str = "⚠️ Less than 1 hour left!"
+
         info = (
             f"<b>💳 Active Subscription</b>\n\n"
             f"<b>Plan:</b> {sub.plan_name}\n"
             f"<b>Status:</b> 🟢 Active\n"
             f"<b>Expires On:</b> {sub.expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
-            f"<b>Days Remaining:</b> {days_left} Days\n"
+            f"<b>Time Remaining:</b> {remaining_str}\n"
             f"<b>Allowed Accounts:</b> Up to {sub.max_accounts} accounts\n\n"
             f"Select a plan below to renew or extend your subscription:"
         )
+
+    elif expired_sub:
+        # Expired subscription — show clear EXPIRED / INACTIVE status
+        expired_on = expired_sub.expires_at.strftime('%Y-%m-%d %H:%M UTC')
+        info = (
+            f"<b>💳 Subscription Status</b>\n\n"
+            f"<b>Plan:</b> {expired_sub.plan_name}\n"
+            f"<b>Status:</b> 🔴 Expired / Inactive\n"
+            f"<b>Expired On:</b> {expired_on}\n\n"
+            f"Your plan has ended. Please purchase a new plan to continue using the bot.\n\n"
+        )
+        # Append sale banner if active
+        if is_sale_active():
+            sale_left = get_sale_days_left()
+            info += (
+                f"🔥 <b>LIMITED SALE — {sale_left} DAYS LEFT!</b>\n"
+                f"⚡ 1 Day – <s>₹49</s> ➜ <b>₹39</b>\n"
+                f"📅 7 Days – <s>₹199</s> ➜ <b>₹179</b>\n"
+                f"🏆 30 Days – <s>₹399</s> ➜ <b>₹299</b>\n\n"
+                f"Select a plan below to reactivate:"
+            )
+        else:
+            info += "Select a plan below to reactivate:"
+
     else:
-        plans = get_active_pricing()
+        # Brand new user — no subscription at all
         if is_sale_active():
             sale_left = get_sale_days_left()
             info = (
@@ -61,6 +110,7 @@ async def show_subscription(message: types.Message):
             )
 
     await message.answer(info, reply_markup=get_subscription_plans_keyboard())
+
 
 
 @router.callback_query(F.data.startswith("buy_sub_"))

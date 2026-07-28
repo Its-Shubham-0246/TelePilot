@@ -8,6 +8,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import (
     FloodWaitError,
+    SlowModeWaitError,
     SessionPasswordNeededError,
     PhoneCodeInvalidError,
     PhoneCodeExpiredError,
@@ -15,6 +16,9 @@ from telethon.errors import (
     AuthKeyInvalidError,
     UserBannedInChannelError,
     ChatWriteForbiddenError,
+    ChatAdminRequiredError,
+    UserNotParticipantError,
+    ChannelPrivateError,
     PeerIdInvalidError,
 )
 
@@ -153,26 +157,66 @@ class MTProtoService:
                     await asyncio.sleep(delay_between_groups + jitter)
 
                 message_text = random.choice(message_variants)
-                try:
-                    if media_url:
-                        await client.send_file(group_entity, media_url, caption=message_text)
-                    else:
-                        await client.send_message(group_entity, message_text)
+                sent = False
 
-                    results.append((group_title, True, f"Message sent successfully to {group_title}", None))
+                for attempt in range(2):  # 1 initial attempt + 1 retry on transient errors
+                    try:
+                        if media_url:
+                            await client.send_file(group_entity, media_url, caption=message_text)
+                        else:
+                            await client.send_message(group_entity, message_text)
 
-                except FloodWaitError as e:
-                    logger.warning(f"FloodWait on group '{group_title}': retry in {e.seconds}s")
-                    results.append((group_title, False, f"FloodWait limit hit: retry in {e.seconds}s", e.seconds))
-                    break  # Stop further sending for this account on FloodWait
+                        results.append((group_title, True, f"Sent to {group_title}", None))
+                        sent = True
+                        break
 
-                except (UserBannedInChannelError, ChatWriteForbiddenError) as e:
-                    logger.warning(f"Permission denied on group '{group_title}': {e}")
-                    results.append((group_title, False, f"Permission denied: {e}", None))
+                    except FloodWaitError as e:
+                        # Account-wide flood wait — stop ALL sends for this account
+                        logger.warning(f"[Broadcast] FloodWait on '{group_title}': {e.seconds}s — stopping account")
+                        results.append((group_title, False, f"FloodWait: retry in {e.seconds}s", e.seconds))
+                        return results  # Return immediately with flood_seconds set
 
-                except Exception as e:
-                    logger.error(f"Failed sending to group '{group_title}': {e}")
-                    results.append((group_title, False, f"Error: {str(e)}", None))
+                    except SlowModeWaitError as e:
+                        # Group slow mode — skip this group, try again next interval
+                        logger.info(f"[Broadcast] SlowMode on '{group_title}': {e.seconds}s wait — skipping this cycle")
+                        results.append((group_title, False, f"SlowMode: {e.seconds}s — will retry next interval", None))
+                        sent = True  # Don't retry, move to next group
+                        break
+
+                    except (UserBannedInChannelError, UserNotParticipantError) as e:
+                        # Kicked or banned from this group — permanent skip
+                        logger.warning(f"[Broadcast] Banned/not member of '{group_title}': {e}")
+                        results.append((group_title, False, f"Banned or not a member: {e}", None))
+                        sent = True  # No point retrying
+                        break
+
+                    except (ChatWriteForbiddenError, ChatAdminRequiredError) as e:
+                        # No write permission (broadcast channel, muted, admin-only) — permanent skip
+                        logger.warning(f"[Broadcast] No write permission in '{group_title}': {e}")
+                        results.append((group_title, False, f"Write not allowed: {e}", None))
+                        sent = True  # No point retrying
+                        break
+
+                    except ChannelPrivateError as e:
+                        # Channel became private — permanent skip
+                        logger.warning(f"[Broadcast] Channel private '{group_title}': {e}")
+                        results.append((group_title, False, f"Channel is now private: {e}", None))
+                        sent = True
+                        break
+
+                    except Exception as e:
+                        if attempt == 0:
+                            # Transient error — wait 2s and retry once
+                            logger.warning(f"[Broadcast] Transient error on '{group_title}' (attempt {attempt+1}): {e} — retrying in 2s")
+                            await asyncio.sleep(2)
+                        else:
+                            # Second failure — log and move on
+                            logger.error(f"[Broadcast] Failed '{group_title}' after retry: {e}")
+                            results.append((group_title, False, f"Failed after retry: {str(e)}", None))
+                            sent = True
+
+                if not sent:
+                    results.append((group_title, False, "Unknown failure", None))
 
             return results
 

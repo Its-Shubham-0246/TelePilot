@@ -5,7 +5,10 @@ from sqlalchemy import select
 from core.database import async_session_factory
 from models.user import User
 from models.payment import Payment
-from services.subscription_service import subscription_service, PRICING_PLANS
+from services.subscription_service import (
+    subscription_service, PRICING_PLANS,
+    get_active_pricing, is_sale_active, get_sale_days_left
+)
 from bot.keyboards.inline import get_subscription_plans_keyboard
 
 router = Router()
@@ -33,14 +36,29 @@ async def show_subscription(message: types.Message):
             f"Select a plan below to renew or extend your subscription:"
         )
     else:
-        info = (
-            f"<b>💳 SaaS Subscription Plans</b>\n\n"
-            f"Get full access to Telegram Multi-Account Automation:\n"
-            f"• 1 Day – <b>₹49</b>\n"
-            f"• 7 Days – <b>₹199</b>\n"
-            f"• 30 Days – <b>₹399</b>\n\n"
-            f"Select a plan below to purchase:"
-        )
+        plans = get_active_pricing()
+        if is_sale_active():
+            sale_left = get_sale_days_left()
+            info = (
+                f"🔥 <b>LIMITED SALE — {sale_left} DAYS LEFT!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"<b>💳 Subscription Plans</b>\n\n"
+                f"⚡ 1 Day    — <s>₹49</s>  ➜  <b>₹39</b>\n"
+                f"📅 7 Days  — <s>₹199</s> ➜  <b>₹179</b>\n"
+                f"🏆 30 Days — <s>₹399</s> ➜  <b>₹299</b>\n\n"
+                f"⏳ Sale ends <b>Aug 7, 2026 at 11:59 PM IST</b>\n"
+                f"Prices go back to normal after that!\n\n"
+                f"Select a plan below to grab this deal:"
+            )
+        else:
+            info = (
+                f"<b>💳 SaaS Subscription Plans</b>\n\n"
+                f"Get full access to Telegram Multi-Account Automation:\n"
+                f"• 1 Day – <b>₹49</b>\n"
+                f"• 7 Days – <b>₹199</b>\n"
+                f"• 30 Days – <b>₹399</b>\n\n"
+                f"Select a plan below to purchase:"
+            )
 
     await message.answer(info, reply_markup=get_subscription_plans_keyboard())
 
@@ -48,7 +66,9 @@ async def show_subscription(message: types.Message):
 @router.callback_query(F.data.startswith("buy_sub_"))
 async def process_buy_sub(callback: types.CallbackQuery):
     days = int(callback.data.split("_")[2])
-    plan = PRICING_PLANS.get(days)
+    # Always use the currently active pricing (sale or regular)
+    plans = get_active_pricing()
+    plan = plans.get(days)
     if not plan:
         await callback.answer("Invalid plan.")
         return
@@ -95,9 +115,16 @@ async def process_buy_sub(callback: types.CallbackQuery):
         pay_keyboard.inline_keyboard.append([types.InlineKeyboardButton(text="💳 Pay Now (UPI / Cards / NetBanking)", url=pay_url)])
     pay_keyboard.inline_keyboard.append([types.InlineKeyboardButton(text="🔄 Check Payment Status", callback_data="verify_payment")])
 
+    # Build amount line — show crossed-out original if it's a sale
+    original = plan.get("original")
+    if original and is_sale_active():
+        amount_line = f"<b>Amount:</b> <s>₹{original}</s> ➜ <b>₹{plan['price']} INR</b> 🔥 Sale Price\n"
+    else:
+        amount_line = f"<b>Amount:</b> ₹{plan['price']} INR\n"
+
     payment_instructions = (
         f"<b>💳 Purchase Subscription ({plan['name']})</b>\n\n"
-        f"<b>Amount:</b> ₹{plan['price']} INR\n"
+        f"{amount_line}"
         f"<b>Order ID:</b> <code>PAY-{pay.id}</code>\n\n"
         f"Click the button below to pay securely via UPI, Google Pay, PhonePe, Cards, or NetBanking."
     )

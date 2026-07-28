@@ -6,11 +6,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.subscription import Subscription
 from models.user import User
 
+# ─── Regular (full) prices ────────────────────────────────────────────────────
 PRICING_PLANS: Dict[int, Dict[str, any]] = {
     1:  {"name": "1 Day Plan",   "days": 1,  "price": 49,  "currency": "INR"},
     7:  {"name": "7 Days Plan",  "days": 7,  "price": 199, "currency": "INR"},
     30: {"name": "30 Days Plan", "days": 30, "price": 399, "currency": "INR"},
 }
+
+# ─── Limited-time sale ────────────────────────────────────────────────────────
+# Sale runs until 23:59 IST on Aug 7, 2026 (10 days from Jul 28).
+# After this date, prices auto-revert to PRICING_PLANS above.
+SALE_ENDS = datetime(2026, 8, 7, 18, 29, 59)   # 23:59:59 IST = 18:29:59 UTC
+
+SALE_PLANS: Dict[int, Dict[str, any]] = {
+    1:  {"name": "1 Day Plan",   "days": 1,  "price": 39,  "currency": "INR", "original": 49},
+    7:  {"name": "7 Days Plan",  "days": 7,  "price": 179, "currency": "INR", "original": 199},
+    30: {"name": "30 Days Plan", "days": 30, "price": 299, "currency": "INR", "original": 399},
+}
+
+
+def is_sale_active() -> bool:
+    """Returns True if the limited-time sale is currently running."""
+    return datetime.utcnow() < SALE_ENDS
+
+
+def get_active_pricing() -> Dict[int, Dict[str, any]]:
+    """Returns the currently active pricing plans (sale or regular)."""
+    return SALE_PLANS if is_sale_active() else PRICING_PLANS
+
+
+def get_sale_days_left() -> int:
+    """Returns whole days remaining in the sale (0 if sale has ended)."""
+    delta = SALE_ENDS - datetime.utcnow()
+    return max(0, delta.days)
+
 
 
 class SubscriptionService:

@@ -25,10 +25,12 @@ from telethon.errors import (
 
 # Permanent error keywords — these should never be retried (no amount of waiting will fix them)
 _PERMANENT_ERROR_KEYWORDS = (
-    'PAYMENT_REQUIRED',   # Group requires Telegram Premium/paid subscription
+    'PAYMENT_REQUIRED',    # Group requires Telegram Premium/paid subscription
     'TOPIC_CLOSED',        # Forum topic is closed by admin
     'INVITE_REQUEST_SENT', # Needs admin approval to join
     'PEER_FLOOD',          # Account is flagged for spamming (account-level)
+    'CHAT_RESTRICTED',     # Account is geo-blocked or restricted from this specific chat
+    'CHAT_WRITE_FORBIDDEN', # An alias for write-forbidden caught as generic exception
 )
 
 from config import settings
@@ -162,8 +164,10 @@ class MTProtoService:
 
             for index, (group_entity, group_title) in enumerate(groups):
                 if index > 0:
-                    jitter = random.uniform(0.5, 1.5)
-                    await asyncio.sleep(delay_between_groups + jitter)
+                    # Shorter delay: 0.8s base + 0.2-0.7s jitter = ~1-1.5s between groups
+                    # Keeps broadcast fast while still avoiding Telegram rate limits
+                    jitter = random.uniform(0.2, 0.7)
+                    await asyncio.sleep(0.8 + jitter)
 
                 message_text = random.choice(message_variants)
                 sent = False

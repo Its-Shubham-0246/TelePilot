@@ -22,6 +22,10 @@ logging.getLogger('telethon.client.updates').setLevel(logging.WARNING)
 logging.getLogger('telethon.client.users').setLevel(logging.WARNING)
 logging.getLogger('telethon.network.mtprotosender').setLevel(logging.WARNING)
 
+# Suppress APScheduler "max instances reached" spam — fires every 5s during long broadcasts (expected behavior)
+logging.getLogger('apscheduler.scheduler').setLevel(logging.ERROR)
+logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
+
 
 async def start_bot():
     logger.info("Initializing Telegram Bot...")

@@ -183,10 +183,30 @@ class SchedulerService:
                 logger.info(f"[Scheduler] {account.phone_number} — no groups found or session unauthorized")
                 continue
 
-            # Log results and handle flood wait
+            # Log results and handle flood wait / session revocation
             sent_count = 0
             failed_count = 0
+            session_revoked = False
             for group_title, success, log_msg, flood_seconds in broadcast_results:
+                # Check for session revocation (dual-IP, auth key invalid, etc.)
+                # Only notify once: after this, status = RE_LOGIN_REQUIRED so account is skipped forever
+                if log_msg == "SESSION_REVOKED":
+                    account.status = "RE_LOGIN_REQUIRED"
+                    await db.commit()
+                    session_revoked = True
+                    if user_telegram_id:
+                        await _notify_user(
+                            user_telegram_id,
+                            f"🔴 <b>Account Session Terminated!</b>\n\n"
+                            f"<code>{account.phone_number}</code> was connected from two locations simultaneously "
+                            f"(happens during Railway deploys) and Telegram permanently terminated the session.\n\n"
+                            f"Please:\n"
+                            f"1️⃣ Tap <b>👤 My Accounts</b>\n"
+                            f"2️⃣ Find this account → <b>🗑 Remove Account</b>\n"
+                            f"3️⃣ Tap <b>➕ Add Account</b> to reconnect"
+                        )
+                    break
+
                 job_log = JobLog(
                     schedule_id=schedule.id,
                     account_id=account.id,
@@ -217,7 +237,8 @@ class SchedulerService:
                     break
 
             await db.commit()
-            logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count}")
+            if not session_revoked:
+                logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count}")
 
 
 scheduler_service = SchedulerService()

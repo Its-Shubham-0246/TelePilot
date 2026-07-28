@@ -14,12 +14,21 @@ from telethon.errors import (
     PhoneCodeExpiredError,
     UserDeactivatedError,
     AuthKeyInvalidError,
+    AuthKeyDuplicatedError,
     UserBannedInChannelError,
     ChatWriteForbiddenError,
     ChatAdminRequiredError,
     UserNotParticipantError,
     ChannelPrivateError,
     PeerIdInvalidError,
+)
+
+# Permanent error keywords — these should never be retried (no amount of waiting will fix them)
+_PERMANENT_ERROR_KEYWORDS = (
+    'PAYMENT_REQUIRED',   # Group requires Telegram Premium/paid subscription
+    'TOPIC_CLOSED',        # Forum topic is closed by admin
+    'INVITE_REQUEST_SENT', # Needs admin approval to join
+    'PEER_FLOOD',          # Account is flagged for spamming (account-level)
 )
 
 from config import settings
@@ -205,14 +214,21 @@ class MTProtoService:
                         break
 
                     except Exception as e:
-                        if attempt == 0:
+                        err_str = str(e)
+                        # Check for known permanent errors — retry is pointless
+                        if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
+                            logger.warning(f"[Broadcast] Permanent skip '{group_title}': {err_str}")
+                            results.append((group_title, False, f"Permanent: {err_str}", None))
+                            sent = True
+                            break
+                        elif attempt == 0:
                             # Transient error — wait 2s and retry once
-                            logger.warning(f"[Broadcast] Transient error on '{group_title}' (attempt {attempt+1}): {e} — retrying in 2s")
+                            logger.warning(f"[Broadcast] Transient error on '{group_title}' (attempt 1): {e} — retrying in 2s")
                             await asyncio.sleep(2)
                         else:
                             # Second failure — log and move on
                             logger.error(f"[Broadcast] Failed '{group_title}' after retry: {e}")
-                            results.append((group_title, False, f"Failed after retry: {str(e)}", None))
+                            results.append((group_title, False, f"Failed after retry: {err_str}", None))
                             sent = True
 
                 if not sent:
@@ -220,12 +236,16 @@ class MTProtoService:
 
             return results
 
+        except AuthKeyDuplicatedError as e:
+            # Session used from two IPs simultaneously (Railway rolling deploy) — session is permanently terminated by Telegram
+            logger.error(f"[Broadcast] Auth key duplicated (dual-IP conflict): {e}")
+            return [("All Groups", False, "SESSION_REVOKED", None)]
         except (UserDeactivatedError, AuthKeyInvalidError) as e:
-            logger.error(f"Account session revoked/invalidated: {e}")
-            return [("All Groups", False, f"Account session revoked: {e}", None)]
+            logger.error(f"[Broadcast] Session revoked/invalidated: {e}")
+            return [("All Groups", False, "SESSION_REVOKED", None)]
         except Exception as e:
-            logger.error(f"Broadcast exception: {e}")
-            return [("All Groups", False, f"Error broadcasting: {str(e)}", None)]
+            logger.error(f"[Broadcast] Unexpected broadcast exception: {type(e).__name__}: {e}")
+            return [("All Groups", False, f"Error: {str(e)}", None)]
         finally:
             try:
                 await client.disconnect()

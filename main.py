@@ -15,6 +15,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("telegram_saas_app")
 
+# Suppress noisy Telethon internal logs (channel updates, connect/disconnect, flood-wait sleeps)
+# Only surface WARNING+ from Telethon so real errors remain visible
+logging.getLogger('telethon').setLevel(logging.WARNING)
+logging.getLogger('telethon.client.updates').setLevel(logging.WARNING)
+logging.getLogger('telethon.client.users').setLevel(logging.WARNING)
+logging.getLogger('telethon.network.mtprotosender').setLevel(logging.WARNING)
+
 
 async def start_bot():
     logger.info("Initializing Telegram Bot...")

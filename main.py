@@ -18,12 +18,20 @@ logger = logging.getLogger("telegram_saas_app")
 
 async def start_bot():
     logger.info("Initializing Telegram Bot...")
+    # Clear any active webhooks or stuck updates so long polling gets messages immediately
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared old Telegram webhooks and pending updates.")
+    except Exception as e:
+        logger.warning(f"delete_webhook warning: {e}")
+
     # Register subscription gate middleware
     dp.message.middleware(SubscriptionGateMiddleware())
     main_router = setup_routers()
     dp.include_router(main_router)
     # Start polling
     await dp.start_polling(bot)
+
 
 
 async def start_api():

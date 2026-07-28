@@ -1,5 +1,7 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
+UPDATES_CHANNEL = "https://t.me/TelePilotUpdates"
+
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -25,6 +27,9 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text="⚙️ Settings"),
                 KeyboardButton(text="🆘 Support"),
+            ],
+            [
+                KeyboardButton(text="📢 Updates Channel"),
             ],
         ],
         resize_keyboard=True,

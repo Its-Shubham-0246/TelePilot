@@ -42,6 +42,7 @@ async def admin_panel(message: types.Message):
         f"<b>💳 Active Subscriptions:</b> {active_subs}\n"
         f"<b>💰 Total Revenue:</b> ₹{total_revenue:,.2f} INR\n\n"
         f"<b>Admin Commands:</b>\n"
+        f"• <code>/subscribers</code> — List all active paid/granted users\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
         f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access\n"
         f"• <code>/broadcast &lt;message&gt;</code> — Send message to all users\n"
@@ -52,6 +53,40 @@ async def admin_panel(message: types.Message):
     )
 
     await message.answer(admin_text)
+
+
+@router.message(Command("subscribers"))
+async def admin_list_subscribers(message: types.Message):
+    """Admin: list all active subscribers."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    async with async_session_factory() as db:
+        stmt = (
+            select(Subscription, User)
+            .join(User, Subscription.user_id == User.id)
+            .where(
+                Subscription.status == "ACTIVE",
+                Subscription.expires_at > datetime.utcnow()
+            )
+            .order_by(Subscription.expires_at.desc())
+        )
+        result = await db.execute(stmt)
+        active_subs = result.all()
+
+    if not active_subs:
+        await message.answer("❌ No active subscribers found.")
+        return
+
+    lines = [f"<b>💳 Active Subscribers ({len(active_subs)})</b>\n"]
+    for sub, u in active_subs:
+        username = f"@{u.username}" if u.username else u.full_name or "Unknown"
+        exp = sub.expires_at.strftime('%Y-%m-%d')
+        lines.append(f"• <code>{u.telegram_id}</code> | {username}\n  └ <b>Plan:</b> {sub.plan_name} (Expires: {exp})")
+
+    await message.answer("\n".join(lines))
+
 
 
 @router.message(Command("users"))

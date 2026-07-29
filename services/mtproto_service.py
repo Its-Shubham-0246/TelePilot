@@ -45,10 +45,10 @@ class MTProtoService:
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
 
-    async def send_login_code(self, phone_number: str) -> Tuple[str, str]:
+    async def send_login_code(self, phone_number: str) -> Tuple[str, str, str]:
         """
         Initiates Telegram sign-in for phone_number.
-        Returns (phone_code_hash, temp_session_string).
+        Returns (phone_code_hash, temp_session_string, code_type_name).
         """
         logger.info(f"[OTP] Sending login code to {phone_number}")
         session = StringSession()
@@ -58,11 +58,13 @@ class MTProtoService:
             logger.info(f"[OTP] Connected to DC{client.session.dc_id} for {phone_number}")
             sent_code = await client.send_code_request(phone_number)
             session_str = client.session.save()
-            logger.info(f"[OTP] Code sent to {phone_number} | hash={sent_code.phone_code_hash[:8]}... | DC={client.session.dc_id}")
-            return sent_code.phone_code_hash, session_str
+            code_type_name = type(sent_code.type).__name__ if hasattr(sent_code, 'type') else "Unknown"
+            logger.info(f"[OTP] Code sent to {phone_number} | hash={sent_code.phone_code_hash[:8]}... | DC={client.session.dc_id} | delivery={code_type_name}")
+            return sent_code.phone_code_hash, session_str, code_type_name
         except Exception as e:
             logger.error(f"[OTP] send_login_code failed for {phone_number}: {type(e).__name__}: {e}")
             raise
+
         finally:
             try:
                 await client.disconnect()

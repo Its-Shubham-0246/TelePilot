@@ -83,18 +83,32 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     await message.answer("⏳ Sending verification code to your Telegram account...")
     try:
-        phone_code_hash, temp_session_str = await mtproto_service.send_login_code(phone)
+        phone_code_hash, temp_session_str, code_type = await mtproto_service.send_login_code(phone)
         await state.update_data(
             phone=phone,
             phone_code_hash=phone_code_hash,
             temp_session_str=temp_session_str
         )
         await state.set_state(AddAccountStates.waiting_for_otp)
+
+        if "App" in code_type:
+            delivery_hint = (
+                "💬 <b>Sent to your TELEGRAM APP chat inbox!</b>\n"
+                "👉 Open your Telegram app and look for a chat message from <b>Telegram</b> (NOT SMS)."
+            )
+        elif "Sms" in code_type:
+            delivery_hint = "📱 <b>Sent via SMS!</b> Check your mobile phone SMS inbox."
+        elif "Call" in code_type:
+            delivery_hint = "📞 <b>Incoming Call!</b> Telegram is calling your phone to dictate the code."
+        else:
+            delivery_hint = "📩 Check your Telegram app chat inbox or SMS for the code."
+
         await message.answer(
             "<b>📩 Enter Verification Code</b>\n\n"
-            f"A code was sent to <code>{phone}</code>.\n\n"
-            "⚠️ <b>Important:</b> To prevent Telegram from auto-expiring your code, please type it with spaces or hyphens:\n"
-            "👉 Example: If your code is <code>71556</code>, type: <b><code>7 1 5 5 6</code></b> (or <code>7-1-5-5-6</code>)\n\n"
+            f"Code sent for <code>{phone}</code>:\n\n"
+            f"{delivery_hint}\n\n"
+            "⚠️ <b>Important:</b> Type it with spaces so it doesn't expire:\n"
+            "👉 Example: If code is <code>71556</code> → type: <b><code>7 1 5 5 6</code></b> (or <code>7-1-5-5-6</code>)\n\n"
             "Tap <b>🔙 Back to Main Menu</b> to cancel.",
             reply_markup=get_cancel_keyboard()
         )
@@ -171,14 +185,23 @@ async def process_otp(message: types.Message, state: FSMContext):
 async def _auto_resend_code(message: types.Message, state: FSMContext, phone: str, reason: str):
     """Automatically requests a fresh OTP and updates FSM with the new hash/session."""
     try:
-        new_hash, new_session = await mtproto_service.send_login_code(phone)
+        new_hash, new_session, code_type = await mtproto_service.send_login_code(phone)
         await state.update_data(phone_code_hash=new_hash, temp_session_str=new_session)
         await state.set_state(AddAccountStates.waiting_for_otp)
+
+        if "App" in code_type:
+            delivery_hint = "💬 Check your <b>Telegram App inbox</b> (chat named 'Telegram'), NOT SMS!"
+        elif "Sms" in code_type:
+            delivery_hint = "📱 Check your <b>mobile SMS inbox</b>."
+        else:
+            delivery_hint = "📩 Check your Telegram app or SMS inbox."
+
         await message.answer(
             f"{reason}\n\n"
-            "🔄 <b>A fresh code has been sent to your Telegram!</b>\n\n"
-            "⚠️ <b>IMPORTANT — Type it with spaces to avoid expiry:</b>\n"
-            "If your code is <code>71556</code> → type: <b><code>7 1 5 5 6</code></b>\n\n"
+            "🔄 <b>A fresh code has been sent!</b>\n\n"
+            f"{delivery_hint}\n\n"
+            "⚠️ <b>IMPORTANT — Type it with spaces:</b>\n"
+            "If code is <code>71556</code> → type: <b><code>7 1 5 5 6</code></b>\n\n"
             "Tap <b>🔙 Back to Main Menu</b> to cancel.",
             reply_markup=get_cancel_keyboard()
         )

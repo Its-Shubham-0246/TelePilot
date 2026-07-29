@@ -230,6 +230,16 @@ async def save_account_session(telegram_id: int, phone: str, session_str: str):
         user = (await db.execute(select(User).where(User.telegram_id == telegram_id))).scalars().first()
         if not user:
             return
+
+        # If this phone number was previously added by another user (or this user), remove the old entry first
+        existing_accounts = (
+            await db.execute(select(TelegramAccount).where(TelegramAccount.phone_number == phone))
+        ).scalars().all()
+
+        for old_acc in existing_accounts:
+            logger.info(f"[Account] Removing phone {phone} from previous user_id={old_acc.user_id} (now claimed by user_id={user.id})")
+            await db.delete(old_acc)
+
         acc = TelegramAccount(
             user_id=user.id,
             phone_number=phone,
@@ -239,6 +249,7 @@ async def save_account_session(telegram_id: int, phone: str, session_str: str):
         acc.set_session_string(session_str)
         db.add(acc)
         await db.commit()
+
 
 
 # ── My Accounts ───────────────────────────────────────────────────────────────

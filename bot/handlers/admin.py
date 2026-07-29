@@ -120,7 +120,6 @@ async def admin_grant_lifetime(message: types.Message):
             status="ACTIVE",
             expires_at=datetime(2099, 12, 31, 23, 59, 59),
             max_accounts=15,
-            amount_paid=0,
         )
         db.add(lifetime_sub)
         await db.commit()

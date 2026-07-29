@@ -31,6 +31,8 @@ _PERMANENT_ERROR_KEYWORDS = (
     'PEER_FLOOD',          # Account is flagged for spamming (account-level)
     'CHAT_RESTRICTED',     # Account is geo-blocked or restricted from this specific chat
     'CHAT_WRITE_FORBIDDEN', # An alias for write-forbidden caught as generic exception
+    'PEER_ID_INVALID',     # Invalid peer type or bot cannot start conversation
+    'invalid Peer',        # Invalid peer message
 )
 
 from config import settings
@@ -196,10 +198,10 @@ class MTProtoService:
                         sent = True  # Don't retry, move to next group
                         break
 
-                    except (UserBannedInChannelError, UserNotParticipantError) as e:
-                        # Kicked or banned from this group — permanent skip
-                        logger.warning(f"[Broadcast] Banned/not member of '{group_title}': {e}")
-                        results.append((group_title, False, f"Banned or not a member: {e}", None))
+                    except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError) as e:
+                        # Kicked, banned, or invalid peer — permanent skip
+                        logger.warning(f"[Broadcast] Banned/invalid peer in '{group_title}': {e}")
+                        results.append((group_title, False, f"Banned or invalid peer: {e}", None))
                         sent = True  # No point retrying
                         break
 

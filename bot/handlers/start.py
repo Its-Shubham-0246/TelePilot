@@ -11,6 +11,10 @@ router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message):
+    if message.chat.type != "private":
+        await message.answer("👉 Please click @TelePilotSaaSBot to message me in private chat!")
+        return
+
     async with async_session_factory() as db:
         stmt = select(User).where(User.telegram_id == message.from_user.id)
         result = await db.execute(stmt)

@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     TELEGRAM_API_ID: int = 12345678
     TELEGRAM_API_HASH: str = "0123456789abcdef0123456789abcdef"
     
-    # Secret Key for AES-256 Fernet Session Encryption
-    ENCRYPTION_SECRET_KEY: str = "-LqRCU7Y66CJR99_diDX0fmxBqCeNpiQKD7A8iTZHb8="
+    # Secret Key for AES-256 Fernet Session Encryption (set via ENCRYPTION_SECRET_KEY env var)
+    ENCRYPTION_SECRET_KEY: str = ""
 
 
 

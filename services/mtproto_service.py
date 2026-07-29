@@ -45,6 +45,19 @@ class MTProtoService:
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
 
+    def _create_client(self, session: StringSession) -> TelegramClient:
+        """Creates TelegramClient with authentic Android device headers so Telegram DC delivers OTPs cleanly on cloud IPs."""
+        return TelegramClient(
+            session,
+            self.api_id,
+            self.api_hash,
+            device_model="Samsung Galaxy S23",
+            system_version="Android 14",
+            app_version="10.14.1",
+            lang_code="en",
+            system_lang_code="en-US"
+        )
+
     async def send_login_code(self, phone_number: str) -> Tuple[str, str, str]:
         """
         Initiates Telegram sign-in for phone_number.
@@ -52,7 +65,7 @@ class MTProtoService:
         """
         logger.info(f"[OTP] Sending login code to {phone_number}")
         session = StringSession()
-        client = TelegramClient(session, self.api_id, self.api_hash)
+        client = self._create_client(session)
         try:
             await client.connect()
             logger.info(f"[OTP] Connected to DC{client.session.dc_id} for {phone_number}")
@@ -80,7 +93,7 @@ class MTProtoService:
         """
         logger.info(f"[OTP] sign_in_code for {phone_number} | code='{code}' | hash={phone_code_hash[:8]}...")
         session = StringSession(temp_session_str)
-        client = TelegramClient(session, self.api_id, self.api_hash)
+        client = self._create_client(session)
         try:
             await client.connect()
             logger.info(f"[OTP] Reconnected to DC{client.session.dc_id} for {phone_number}")
@@ -108,7 +121,7 @@ class MTProtoService:
         """
         logger.info(f"[OTP] sign_in_2fa for {phone_number}")
         session = StringSession(temp_session_str)
-        client = TelegramClient(session, self.api_id, self.api_hash)
+        client = self._create_client(session)
         try:
             await client.connect()
             await client.sign_in(password=password)
@@ -146,7 +159,7 @@ class MTProtoService:
             return []
 
         session = StringSession(session_str)
-        client = TelegramClient(session, self.api_id, self.api_hash)
+        client = self._create_client(session)
         results = []
 
         try:
@@ -266,7 +279,7 @@ class MTProtoService:
         Returns list of (dialog_entity, dialog_title).
         """
         session = StringSession(session_str)
-        client = TelegramClient(session, self.api_id, self.api_hash)
+        client = self._create_client(session)
         groups = []
         try:
             await client.connect()
@@ -302,7 +315,7 @@ class MTProtoService:
 
         message_text = random.choice(message_variants)
         session = StringSession(session_str)
-        client = TelegramClient(session, self.api_id, self.api_hash)
+        client = self._create_client(session)
 
         try:
             await client.connect()

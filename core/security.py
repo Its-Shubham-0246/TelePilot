@@ -7,12 +7,14 @@ logger = logging.getLogger(__name__)
 
 
 def _get_fernet() -> Fernet:
-    key = settings.ENCRYPTION_SECRET_KEY.encode('utf-8')
+    raw_key = settings.ENCRYPTION_SECRET_KEY or "default_development_secret_key_change_me_in_production"
+    key = raw_key.encode('utf-8')
     try:
         return Fernet(key)
     except Exception:
         key_32 = base64.urlsafe_b64encode(key.ljust(32)[:32])
         return Fernet(key_32)
+
 
 
 def encrypt_session_string(session_str: str) -> str:

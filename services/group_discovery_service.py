@@ -14,26 +14,28 @@ logger = logging.getLogger(__name__)
 
 
 async def _notify_alert(text: str):
-    """Send alert to admin DM and/or to the configured alert group chat."""
+    """Send alert to the configured alert group chat. If not set, fallback to admin DM."""
     try:
         from bot.bot_instance import bot
 
-        # Send to admin
+        # If alert group chat ID is configured, send exclusively to the private group
+        if settings.ALERT_GROUP_CHAT_ID and settings.ALERT_GROUP_CHAT_ID.strip():
+            try:
+                chat_id = int(settings.ALERT_GROUP_CHAT_ID.strip())
+                await bot.send_message(chat_id, text, parse_mode="HTML")
+                return
+            except Exception as e:
+                logger.warning(f"[GroupAlert] Failed to send to alert group {settings.ALERT_GROUP_CHAT_ID}: {e}")
+
+        # Fallback: send to admin DM if no group chat ID is set
         for admin_id in settings.admin_ids_list:
             try:
                 await bot.send_message(admin_id, text, parse_mode="HTML")
             except Exception:
                 pass
-
-        # Also send to the configured alert group if set
-        if settings.ALERT_GROUP_CHAT_ID:
-            try:
-                chat_id = int(settings.ALERT_GROUP_CHAT_ID)
-                await bot.send_message(chat_id, text, parse_mode="HTML")
-            except Exception as e:
-                logger.warning(f"[GroupAlert] Failed to send to alert group: {e}")
     except Exception as e:
         logger.warning(f"[GroupAlert] _notify_alert failed: {e}")
+
 
 
 async def _get_reference_group_ids() -> Set[int]:

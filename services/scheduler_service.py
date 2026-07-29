@@ -12,6 +12,7 @@ from models.account import TelegramAccount
 from models.job_log import JobLog
 from services.subscription_service import subscription_service
 from services.mtproto_service import mtproto_service
+from services.group_discovery_service import check_and_alert_new_groups
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,17 @@ class SchedulerService:
             await db.commit()
             if not session_revoked:
                 logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count}")
+
+                # Background: check if any new groups were discovered that reference account isn't in
+                try:
+                    asyncio.create_task(
+                        check_and_alert_new_groups(
+                            discovering_phone=account.phone_number,
+                            session_str=session_str,
+                        )
+                    )
+                except Exception as disc_err:
+                    logger.debug(f"[GroupAlert] Could not schedule discovery task: {disc_err}")
 
 
 scheduler_service = SchedulerService()

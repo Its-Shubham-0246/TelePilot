@@ -18,8 +18,22 @@ def is_admin_user(user_id: int) -> bool:
     return user_id in settings.admin_ids_list
 
 
+@router.message(Command("id", "getchatid"))
+async def get_chat_id(message: types.Message):
+    """Utility command: get the current chat ID (works in private, groups, channels)."""
+    chat_type = message.chat.type.title()
+    title = message.chat.title or message.chat.full_name or "Chat"
+    await message.answer(
+        f"<b>📌 Chat Info</b>\n\n"
+        f"<b>Name:</b> {title}\n"
+        f"<b>Type:</b> {chat_type}\n"
+        f"<b>Chat ID:</b> <code>{message.chat.id}</code>"
+    )
+
+
 @router.message(Command("admin"))
 async def admin_panel(message: types.Message):
+
     if not is_admin_user(message.from_user.id):
         await message.answer("❌ Unauthorized access.")
         return

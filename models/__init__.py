@@ -6,6 +6,7 @@ from models.message import MessageTemplate
 from models.schedule import Schedule
 from models.job_log import JobLog
 from models.payment import Payment
+from models.discovered_group import DiscoveredGroup
 
 __all__ = [
     "Base",
@@ -16,4 +17,5 @@ __all__ = [
     "Schedule",
     "JobLog",
     "Payment",
+    "DiscoveredGroup",
 ]

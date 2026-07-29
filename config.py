@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     
     # Admin Telegram IDs (list or comma-separated)
     ADMIN_TELEGRAM_IDS: str = "123456789"
+
+    # Group Discovery Alert Feature:
+    # The phone number of the reference account (e.g. the account you use most)
+    # When any other account finds a group that this account is NOT in, you get an alert.
+    REFERENCE_ACCOUNT_PHONE: str = ""
+
+    # Chat ID of the Telegram group where new group alerts will be sent.
+    # Add the bot to your private group, get the chat ID, and set it here.
+    ALERT_GROUP_CHAT_ID: str = ""
     
     # App Settings
     MAX_ACCOUNTS_PER_USER: int = 15

@@ -41,13 +41,21 @@ async def _get_reference_group_ids() -> Set[int]:
     if not ref_phone:
         return set()
 
+    clean_ref = "".join(c for c in ref_phone if c.isdigit())
+    if not clean_ref:
+        return set()
+
     async with async_session_factory() as db:
-        acc = (await db.execute(
-            select(TelegramAccount).where(TelegramAccount.phone_number == ref_phone)
-        )).scalars().first()
+        all_accs = (await db.execute(select(TelegramAccount))).scalars().all()
+        acc = None
+        for a in all_accs:
+            acc_digits = "".join(c for c in a.phone_number if c.isdigit())
+            if acc_digits and (clean_ref in acc_digits or acc_digits in clean_ref):
+                acc = a
+                break
 
     if not acc:
-        logger.warning(f"[GroupAlert] Reference account {ref_phone} not found in DB.")
+        logger.warning(f"[GroupAlert] Reference account '{ref_phone}' (digits: {clean_ref}) not found in DB.")
         return set()
 
     try:
@@ -59,6 +67,7 @@ async def _get_reference_group_ids() -> Set[int]:
     except Exception as e:
         logger.error(f"[GroupAlert] Error fetching groups for reference account: {e}")
         return set()
+
 
 
 async def check_and_alert_new_groups(
@@ -77,8 +86,11 @@ async def check_and_alert_new_groups(
         return  # Feature disabled — no reference account configured
 
     # Skip if discovering account IS the reference account itself
-    if discovering_phone.strip() == ref_phone:
+    clean_disc = "".join(c for c in discovering_phone if c.isdigit())
+    clean_ref = "".join(c for c in ref_phone if c.isdigit())
+    if clean_disc and clean_ref and (clean_disc in clean_ref or clean_ref in clean_disc):
         return
+
 
     try:
         groups = await mtproto_service.fetch_joined_groups(session_str)

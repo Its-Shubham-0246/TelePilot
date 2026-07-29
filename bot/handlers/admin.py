@@ -59,6 +59,7 @@ async def admin_panel(message: types.Message):
         f"• <code>/subscribers</code> — List all active paid/granted users\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
         f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access\n"
+        f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
         f"• <code>/broadcast &lt;message&gt;</code> — Send message to all users\n"
         f"• <code>/ban &lt;telegram_id&gt;</code> — Ban user\n"
         f"• <code>/unban &lt;telegram_id&gt;</code> — Unban user\n"
@@ -67,6 +68,28 @@ async def admin_panel(message: types.Message):
     )
 
     await message.answer(admin_text)
+
+
+@router.message(Command("cleargroupalerts"))
+async def admin_clear_group_alerts(message: types.Message):
+    """Admin: clear discovered_groups memory so missing group alerts trigger again on next broadcast."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    from models.discovered_group import DiscoveredGroup
+    from sqlalchemy import delete
+
+    async with async_session_factory() as db:
+        await db.execute(delete(DiscoveredGroup))
+        await db.commit()
+
+    await message.answer(
+        "✅ <b>Group Alert Memory Cleared!</b>\n\n"
+        "All group discovery records have been reset.\n"
+        "On the next broadcast cycle, any group missing from your reference account will trigger an immediate alert in your private group!"
+    )
+
 
 
 @router.message(Command("subscribers"))

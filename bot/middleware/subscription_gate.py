@@ -45,9 +45,21 @@ class SubscriptionGateMiddleware(BaseMiddleware):
     ) -> Any:
         text = (event.text or "").strip()
 
-        # Only gate specific menu button presses
+        # Block menu button presses and general commands in group chats (redirect to private DM)
+        if event.chat.type != "private":
+            if text in FREE_ACCESS or text in GATED_BUTTONS or text.startswith("/"):
+                # Allow utility commands like /id or /getchatid in groups
+                if text.startswith("/id") or text.startswith("/getchatid"):
+                    return await handler(event, data)
+
+                await event.answer("👉 Please click @TelePilotSaaSBot to use the bot in private chat!")
+                return
+            return await handler(event, data)
+
+        # Only gate specific menu button presses in private DM
         if text not in GATED_BUTTONS:
             return await handler(event, data)
+
 
         # Check subscription status
         async with async_session_factory() as db:

@@ -39,6 +39,15 @@ async def start_bot():
             logger.warning(f"delete_webhook attempt {attempt+1} failed: {e}")
             await asyncio.sleep(3)
 
+    # Set official Telegram Bot Bio & Description (featuring 10,000+ Users badge)
+    try:
+        await bot.set_my_description("TelePilot SaaS Bot — Trusted by 10,000+ Users! Automate group messaging across multiple Telegram accounts effortlessly 24/7.")
+        await bot.set_my_short_description("TelePilot — Telegram Group Automation | Trusted by 10,000+ Users 🚀")
+        logger.info("Configured official Bot Description & Bio (10,000+ Users).")
+    except Exception as desc_err:
+        logger.warning(f"Failed to set bot descriptions: {desc_err}")
+
+
     # Register subscription gate middleware
     dp.message.middleware(SubscriptionGateMiddleware())
     main_router = setup_routers()

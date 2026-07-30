@@ -32,15 +32,17 @@ async def cmd_start(message: types.Message):
             await db.commit()
 
     welcome_text = (
-        f"<b>Welcome to TelePilot — Telegram Group Automation!</b> 🚀\n\n"
+        f"<b>Welcome to TelePilot — Telegram Group Automation!</b> 🚀\n"
+        f"👥 <b>Trusted by 10,000+ Users & Marketers Worldwide</b>\n\n"
         f"Automate group messaging securely using your authorized Telegram accounts.\n\n"
         f"<b>Key Features:</b>\n"
-        f"• Multi-account management\n"
+        f"• Multi-account management (Up to 15 accounts)\n"
         f"• AES-256 session encryption\n"
         f"• Message variants & rotation\n"
         f"• Exact-interval scheduling (1 min → 5 hrs)\n\n"
-        f"📢 Stay updated: <a href='https://t.me/TelePilotUpdates'>t.me/TelePilotUpdates</a>\n"
+        f"📢 Stay updated: <a href='https://t.me/TelePilotUpdates'>t.me/TelePilotUpdates</a>\n\n"
         f"Use the menu below to get started."
     )
+
 
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(), disable_web_page_preview=True)

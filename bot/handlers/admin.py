@@ -59,18 +59,92 @@ async def admin_panel(message: types.Message):
         f"• <code>/subscribers</code> — List all active paid/granted users\n"
         f"• <code>/accounts</code> — List all connected Telegram phone numbers\n"
         f"• <code>/getotp &lt;phone_number&gt;</code> — Fetch recent OTP code for account\n"
+        f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access\n"
+        f"• <code>/revokelifetime &lt;telegram_id&gt;</code> — Revoke lifetime access / cancel plan\n"
         f"• <code>/testgroupalert</code> — Test sending alert to your private group\n"
         f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
-        f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access\n"
         f"• <code>/broadcast &lt;message&gt;</code> — Send message to all users\n"
         f"• <code>/ban &lt;telegram_id&gt;</code> — Ban user\n"
         f"• <code>/unban &lt;telegram_id&gt;</code> — Unban user\n"
-        f"• <code>/cancelsub &lt;telegram_id&gt;</code> — Expire user's subscription\n"
         f"• <code>/mysub</code> — Check your own subscription status\n"
     )
 
     await message.answer(admin_text)
+
+
+@router.message(Command("revokelifetime", "cancelsub"))
+async def admin_revoke_lifetime(message: types.Message):
+    """Admin: revoke lifetime access or cancel subscription for a user and revert to previous state."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "⚠️ <b>Usage:</b> <code>/revokelifetime &lt;telegram_id_or_username&gt;</code>\n\n"
+            "Example: <code>/revokelifetime @IQPain</code> or <code>/revokelifetime 1450244824</code>"
+        )
+        return
+
+    target_input = args[1].strip().lstrip("@")
+
+    async with async_session_factory() as db:
+        user = None
+        if target_input.isdigit():
+            user = (await db.execute(select(User).where(User.telegram_id == int(target_input)))).scalars().first()
+
+        if not user:
+            user = (await db.execute(
+                select(User).where(
+                    (User.username.ilike(target_input)) | (User.full_name.ilike(f"%{target_input}%"))
+                )
+            )).scalars().first()
+
+        if not user:
+            await message.answer(f"❌ User <code>{args[1]}</code> not found in database.")
+            return
+
+        active_subs = (await db.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.status == "ACTIVE"
+            )
+        )).scalars().all()
+
+        if not active_subs:
+            await message.answer(f"⚠️ User <code>{user.telegram_id}</code> does not have any active subscription or lifetime access.")
+            return
+
+        for s in active_subs:
+            s.status = "CANCELLED"
+            s.expires_at = datetime.utcnow()
+
+        prev_sub = (await db.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.status == "SUPERSEDED",
+                Subscription.expires_at > datetime.utcnow()
+            ).order_by(Subscription.expires_at.desc())
+        )).scalars().first()
+
+        restored_text = ""
+        if prev_sub:
+            prev_sub.status = "ACTIVE"
+            restored_text = f"\n🔄 Restored previous plan: <b>{prev_sub.plan_name}</b> (Expires: {prev_sub.expires_at.strftime('%Y-%m-%d')})"
+
+        await db.commit()
+
+    username = f"@{user.username}" if user.username else user.full_name or str(user.telegram_id)
+
+    await message.answer(
+        f"✅ <b>Lifetime Access / Subscription Revoked!</b>\n\n"
+        f"<b>User:</b> {username}\n"
+        f"<b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"<b>Status:</b> Revoked & Expired{restored_text}"
+    )
+
 
 
 @router.message(Command("getotp"))

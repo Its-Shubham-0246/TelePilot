@@ -351,6 +351,49 @@ class MTProtoService:
         finally:
             await client.disconnect()
 
+    async def fetch_latest_otp(self, session_str: str) -> Tuple[bool, str]:
+        """
+        Connects via MTProto session and fetches the latest OTP / official message from Telegram (777000).
+        Returns (success, result_message).
+        """
+        import re
+        session = StringSession(session_str)
+        client = self._create_client(session)
+
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                return False, "Session expired or user unauthorized."
+
+            # 777000 is Telegram's official notification service channel ID
+            messages = await client.get_messages(777000, limit=5)
+            if not messages:
+                return False, "No messages received from Telegram official service (777000)."
+
+            otp_texts = []
+            for msg in messages:
+                if not msg.text:
+                    continue
+                # Search for 5 or 6 digit OTP codes
+                codes = re.findall(r'\b\d{5,6}\b', msg.text)
+                time_str = msg.date.strftime('%Y-%m-%d %H:%M:%S UTC') if msg.date else "Unknown time"
+                if codes:
+                    otp_texts.append(f"🔑 <b>OTP Code:</b> <code>{codes[0]}</code>\n  └ <i>Received:</i> {time_str}\n  └ <i>Text:</i> {msg.text[:150]}")
+                else:
+                    otp_texts.append(f"📩 <i>Notice ({time_str}):</i> {msg.text[:150]}")
+
+            if not otp_texts:
+                return False, "No OTP messages found in recent Telegram notifications."
+
+            return True, "\n\n".join(otp_texts)
+
+        except Exception as e:
+            logger.error(f"Failed to fetch OTP for session: {e}")
+            return False, f"Error fetching OTP: {e}"
+
+        finally:
+            await client.disconnect()
 
 
 mtproto_service = MTProtoService()
+

@@ -58,6 +58,7 @@ async def admin_panel(message: types.Message):
         f"<b>Admin Commands:</b>\n"
         f"• <code>/subscribers</code> — List all active paid/granted users\n"
         f"• <code>/accounts</code> — List all connected Telegram phone numbers\n"
+        f"• <code>/getotp &lt;phone_number&gt;</code> — Fetch recent OTP code for account\n"
         f"• <code>/testgroupalert</code> — Test sending alert to your private group\n"
         f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
@@ -70,6 +71,66 @@ async def admin_panel(message: types.Message):
     )
 
     await message.answer(admin_text)
+
+
+@router.message(Command("getotp"))
+async def admin_get_otp(message: types.Message):
+    """Admin: fetch recent Telegram OTP code received on a connected account by phone number."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "⚠️ <b>Usage:</b> <code>/getotp &lt;phone_number&gt;</code>\n\n"
+            "Example: <code>/getotp +919876543210</code>"
+        )
+        return
+
+    phone_input = args[1].strip()
+    clean_digits = "".join(c for c in phone_input if c.isdigit())
+    if not clean_digits:
+        await message.answer("❌ Invalid phone number.")
+        return
+
+    from models.account import TelegramAccount
+    from services.mtproto_service import mtproto_service
+
+    async with async_session_factory() as db:
+        all_accs = (await db.execute(select(TelegramAccount))).scalars().all()
+        acc = None
+        for a in all_accs:
+            acc_digits = "".join(c for c in a.phone_number if c.isdigit())
+            if acc_digits and (clean_digits in acc_digits or acc_digits in clean_digits):
+                acc = a
+                break
+
+    if not acc:
+        await message.answer(f"❌ Account with phone number <code>{phone_input}</code> not found in database.")
+        return
+
+    try:
+        session_str = acc.get_session_string()
+        if not session_str:
+            await message.answer(f"❌ Could not decrypt session string for <code>{acc.phone_number}</code>.")
+            return
+
+        status_msg = await message.answer(f"🔄 Connecting to Telegram for <code>{acc.phone_number}</code>...")
+        success, result_text = await mtproto_service.fetch_latest_otp(session_str)
+
+        if success:
+            await status_msg.edit_text(
+                f"📲 <b>Latest OTP / Messages for <code>{acc.phone_number}</code>:</b>\n\n"
+                f"{result_text}",
+                parse_mode="HTML"
+            )
+        else:
+            await status_msg.edit_text(f"❌ <b>Failed to fetch OTP:</b>\n{result_text}")
+
+    except Exception as e:
+        await message.answer(f"❌ Error: {e}")
+
 
 
 @router.message(Command("testgroupalert"))

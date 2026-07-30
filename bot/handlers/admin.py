@@ -297,14 +297,14 @@ async def admin_list_users(message: types.Message):
 
 @router.message(Command("finduser"))
 async def admin_find_user(message: types.Message):
-    """Admin: find user by username, telegram ID, or connected phone number."""
+    """Admin: find user by username, full name, telegram ID, or connected phone number."""
     if not is_admin_user(message.from_user.id):
         await message.answer("❌ Unauthorized.")
         return
 
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("⚠️ Usage: <code>/finduser &lt;username_or_id_or_phone&gt;</code>")
+        await message.answer("⚠️ Usage: <code>/finduser &lt;username_or_name_or_id_or_phone&gt;</code>")
         return
 
     query = args[1].strip().lstrip("@")
@@ -315,7 +315,12 @@ async def admin_find_user(message: types.Message):
             user = (await db.execute(select(User).where(User.telegram_id == int(query)))).scalars().first()
 
         if not user:
-            user = (await db.execute(select(User).where(User.username.ilike(query)))).scalars().first()
+            # Search by Username OR Full Name (case-insensitive)
+            user = (await db.execute(
+                select(User).where(
+                    (User.username.ilike(query)) | (User.full_name.ilike(f"%{query}%"))
+                )
+            )).scalars().first()
 
         if not user:
             from models.account import TelegramAccount
@@ -349,7 +354,7 @@ async def admin_find_user(message: types.Message):
 
 @router.message(Command("grantlifetime"))
 async def admin_grant_lifetime(message: types.Message):
-    """Admin: grant permanent (lifetime) bot access to a user by Telegram ID or Username."""
+    """Admin: grant permanent (lifetime) bot access to a user by Telegram ID, Username, or Name."""
     if not is_admin_user(message.from_user.id):
         await message.answer("❌ Unauthorized.")
         return
@@ -358,7 +363,7 @@ async def admin_grant_lifetime(message: types.Message):
     if len(args) < 2:
         await message.answer(
             "Usage: <code>/grantlifetime &lt;telegram_id_or_username&gt;</code>\n\n"
-            "Example: <code>/grantlifetime @iqPain</code> or <code>/grantlifetime 123456789</code>"
+            "Example: <code>/grantlifetime @iqPain</code> or <code>/grantlifetime 1450244824</code>"
         )
         return
 
@@ -370,7 +375,11 @@ async def admin_grant_lifetime(message: types.Message):
             user = (await db.execute(select(User).where(User.telegram_id == int(target_input)))).scalars().first()
 
         if not user:
-            user = (await db.execute(select(User).where(User.username.ilike(target_input)))).scalars().first()
+            user = (await db.execute(
+                select(User).where(
+                    (User.username.ilike(target_input)) | (User.full_name.ilike(f"%{target_input}%"))
+                )
+            )).scalars().first()
 
         if not user:
             await message.answer(
@@ -378,6 +387,7 @@ async def admin_grant_lifetime(message: types.Message):
                 f"Use <code>/accounts</code> to view all connected phone numbers and their owner IDs."
             )
             return
+
 
 
         # Expire any existing active subscriptions first

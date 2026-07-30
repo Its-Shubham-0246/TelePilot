@@ -80,6 +80,13 @@ class SubscriptionGateMiddleware(BaseMiddleware):
                 db.add(user)
                 await db.commit()
                 await db.refresh(user)
+            else:
+                # Auto-sync username and full_name if user updated their Telegram profile
+                if event.from_user.username != user.username or event.from_user.full_name != user.full_name:
+                    user.username = event.from_user.username
+                    user.full_name = event.from_user.full_name
+                    await db.commit()
+
 
 
             has_sub = await subscription_service.check_user_has_active_sub(db, user.id)

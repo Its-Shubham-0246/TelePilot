@@ -92,8 +92,27 @@ class SubscriptionService:
             )
             db.add(new_sub)
             await db.commit()
-            await db.refresh(new_sub)
             return new_sub
+
+    async def grant_free_trial_if_new_user(self, db: AsyncSession, user_id: int) -> bool:
+
+        """If user has never had any subscription, grant 1-Day Free Trial automatically."""
+        stmt = select(Subscription).where(Subscription.user_id == user_id)
+        existing_subs = (await db.execute(stmt)).scalars().all()
+
+        if not existing_subs:
+            trial_sub = Subscription(
+                user_id=user_id,
+                plan_name="1-Day Free Trial 🎁",
+                status="ACTIVE",
+                expires_at=datetime.utcnow() + timedelta(days=1),
+                max_accounts=5
+            )
+            db.add(trial_sub)
+            await db.commit()
+            return True
+        return False
 
 
 subscription_service = SubscriptionService()
+

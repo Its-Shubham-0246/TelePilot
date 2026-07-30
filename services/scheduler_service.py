@@ -85,10 +85,11 @@ class SchedulerService:
             if user_telegram_id:
                 await _notify_user(
                     user_telegram_id,
-                    "⚠️ <b>Auto-Messaging Paused (Trial / Plan Expired)</b>\n\n"
-                    "Your free trial or plan has ended and auto-messaging has been paused.\n\n"
-                    "Tap <b>💳 Subscription</b> below to activate a paid plan for as low as <b>₹39</b> and keep broadcasting 24/7!"
+                    "⚠️ <b>Auto-Messaging Paused</b>\n\n"
+                    "Your subscription has expired and auto-messaging has been stopped.\n\n"
+                    "Tap <b>💳 Subscription</b> to renew."
                 )
+
 
             return
 

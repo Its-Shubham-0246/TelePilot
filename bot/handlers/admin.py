@@ -58,9 +58,10 @@ async def admin_panel(message: types.Message):
         f"<b>Admin Commands:</b>\n"
         f"• <code>/subscribers</code> — List all active paid/granted users\n"
         f"• <code>/accounts</code> — List all connected Telegram phone numbers\n"
+        f"• <code>/testgroupalert</code> — Test sending alert to your private group\n"
+        f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
         f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access\n"
-        f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
         f"• <code>/broadcast &lt;message&gt;</code> — Send message to all users\n"
         f"• <code>/ban &lt;telegram_id&gt;</code> — Ban user\n"
         f"• <code>/unban &lt;telegram_id&gt;</code> — Unban user\n"
@@ -69,6 +70,53 @@ async def admin_panel(message: types.Message):
     )
 
     await message.answer(admin_text)
+
+
+@router.message(Command("testgroupalert"))
+async def admin_test_group_alert(message: types.Message):
+    """Admin: test sending a message to the configured private alert group."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    ref_phone = settings.REFERENCE_ACCOUNT_PHONE or "NOT SET"
+    alert_chat_id = settings.ALERT_GROUP_CHAT_ID or "NOT SET"
+
+    if not settings.ALERT_GROUP_CHAT_ID or not settings.ALERT_GROUP_CHAT_ID.strip():
+        await message.answer(
+            f"❌ <b>ALERT_GROUP_CHAT_ID is not configured in Railway!</b>\n\n"
+            f"<b>Current Values:</b>\n"
+            f"• <code>REFERENCE_ACCOUNT_PHONE</code>: {ref_phone}\n"
+            f"• <code>ALERT_GROUP_CHAT_ID</code>: {alert_chat_id}\n\n"
+            f"Please set <code>ALERT_GROUP_CHAT_ID</code> in Railway Environment Variables!"
+        )
+        return
+
+    try:
+        from bot.bot_instance import bot
+        chat_id = int(settings.ALERT_GROUP_CHAT_ID.strip())
+        await bot.send_message(
+            chat_id,
+            f"🔔 <b>Test Alert Message</b>\n\n"
+            f"If you see this message in your private group, group alerts are <b>WORKING 100% PERFECTLY</b>! 🎉\n\n"
+            f"• Reference Account: <code>{ref_phone}</code>\n"
+            f"• Alert Group ID: <code>{chat_id}</code>",
+            parse_mode="HTML"
+        )
+        await message.answer(
+            f"✅ <b>Test Alert Sent Successfully!</b>\n\n"
+            f"Check your private group chat (ID: <code>{chat_id}</code>).\n\n"
+            f"💡 <i>Tip: Send <code>/cleargroupalerts</code> to reset group memory so unjoined groups trigger alerts again!</i>"
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ <b>Failed to send test alert to group:</b>\n\n"
+            f"<code>{e}</code>\n\n"
+            f"<b>Possible Causes:</b>\n"
+            f"1. Bot <code>@TelePilotSaaSBot</code> is not added as a member in the private group.\n"
+            f"2. Incorrect <code>ALERT_GROUP_CHAT_ID</code> value in Railway."
+        )
+
 
 
 @router.message(Command("accounts"))

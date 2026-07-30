@@ -295,31 +295,90 @@ async def admin_list_users(message: types.Message):
     await message.answer("\n".join(lines))
 
 
-@router.message(Command("grantlifetime"))
-async def admin_grant_lifetime(message: types.Message):
-    """Admin: grant permanent (lifetime) bot access to a user by Telegram ID."""
+@router.message(Command("finduser"))
+async def admin_find_user(message: types.Message):
+    """Admin: find user by username, telegram ID, or connected phone number."""
     if not is_admin_user(message.from_user.id):
         await message.answer("❌ Unauthorized.")
         return
 
     args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
+    if len(args) < 2:
+        await message.answer("⚠️ Usage: <code>/finduser &lt;username_or_id_or_phone&gt;</code>")
+        return
+
+    query = args[1].strip().lstrip("@")
+
+    async with async_session_factory() as db:
+        user = None
+        if query.isdigit():
+            user = (await db.execute(select(User).where(User.telegram_id == int(query)))).scalars().first()
+
+        if not user:
+            user = (await db.execute(select(User).where(User.username.ilike(query)))).scalars().first()
+
+        if not user:
+            from models.account import TelegramAccount
+            acc = (await db.execute(select(TelegramAccount).where(TelegramAccount.phone_number.contains(query)))).scalars().first()
+            if acc:
+                user = (await db.execute(select(User).where(User.id == acc.user_id))).scalars().first()
+
+        if not user:
+            await message.answer(f"❌ User '{args[1]}' not found in database.")
+            return
+
+        from services.subscription_service import subscription_service
+        from models.account import TelegramAccount
+
+        active_sub = await subscription_service.get_active_subscription(db, user.id)
+        accs = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
+
+    sub_info = f"{active_sub.plan_name} (Expires: {active_sub.expires_at.strftime('%Y-%m-%d')})" if active_sub else "🔴 No Active Subscription"
+    acc_list = "\n".join([f"  • <code>{a.phone_number}</code> ({a.status})" for a in accs]) if accs else "  • None"
+
+    await message.answer(
+        f"👤 <b>User Information:</b>\n\n"
+        f"<b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"<b>Username:</b> @{user.username if user.username else 'None'}\n"
+        f"<b>Full Name:</b> {user.full_name or '—'}\n"
+        f"<b>Subscription:</b> {sub_info}\n"
+        f"<b>Connected Accounts ({len(accs)}):</b>\n{acc_list}\n\n"
+        f"💡 <i>To grant lifetime access, run:</i>\n<code>/grantlifetime {user.telegram_id}</code>"
+    )
+
+
+@router.message(Command("grantlifetime"))
+async def admin_grant_lifetime(message: types.Message):
+    """Admin: grant permanent (lifetime) bot access to a user by Telegram ID or Username."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
         await message.answer(
-            "Usage: <code>/grantlifetime &lt;telegram_id&gt;</code>\n\n"
-            "Tip: Use /users to find the Telegram ID of any registered user."
+            "Usage: <code>/grantlifetime &lt;telegram_id_or_username&gt;</code>\n\n"
+            "Example: <code>/grantlifetime @iqPain</code> or <code>/grantlifetime 123456789</code>"
         )
         return
 
-    target_telegram_id = int(args[1])
+    target_input = args[1].strip().lstrip("@")
 
     async with async_session_factory() as db:
-        user = (await db.execute(select(User).where(User.telegram_id == target_telegram_id))).scalars().first()
+        user = None
+        if target_input.isdigit():
+            user = (await db.execute(select(User).where(User.telegram_id == int(target_input)))).scalars().first()
+
+        if not user:
+            user = (await db.execute(select(User).where(User.username.ilike(target_input)))).scalars().first()
+
         if not user:
             await message.answer(
-                f"❌ User <code>{target_telegram_id}</code> not found.\n\n"
-                f"Ask them to send /start to the bot first, then try again."
+                f"❌ User <code>{args[1]}</code> not found in database.\n\n"
+                f"Use <code>/accounts</code> to view all connected phone numbers and their owner IDs."
             )
             return
+
 
         # Expire any existing active subscriptions first
         existing_subs = (await db.execute(
@@ -342,12 +401,13 @@ async def admin_grant_lifetime(message: types.Message):
         db.add(lifetime_sub)
         await db.commit()
 
-    username = f"@{user.username}" if user.username else user.full_name or str(target_telegram_id)
+    username = f"@{user.username}" if user.username else user.full_name or str(user.telegram_id)
 
     # Notify the granted user
     try:
         await message.bot.send_message(
-            target_telegram_id,
+            user.telegram_id,
+
             f"🎉 <b>Lifetime Access Granted!</b>\n\n"
             f"You have been given <b>permanent free access</b> to TelePilot Bot by the admin.\n\n"
             f"✅ All features unlocked\n"

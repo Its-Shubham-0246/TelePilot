@@ -57,6 +57,7 @@ async def admin_panel(message: types.Message):
         f"<b>💰 Total Revenue:</b> ₹{total_revenue:,.2f} INR\n\n"
         f"<b>Admin Commands:</b>\n"
         f"• <code>/subscribers</code> — List all active paid/granted users\n"
+        f"• <code>/accounts</code> — List all connected Telegram phone numbers\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
         f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access\n"
         f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
@@ -68,6 +69,42 @@ async def admin_panel(message: types.Message):
     )
 
     await message.answer(admin_text)
+
+
+@router.message(Command("accounts"))
+async def admin_list_accounts(message: types.Message):
+    """Admin: list all connected Telegram accounts across all users."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    from models.account import TelegramAccount
+
+    async with async_session_factory() as db:
+        stmt = (
+            select(TelegramAccount, User)
+            .join(User, TelegramAccount.user_id == User.id)
+            .order_by(TelegramAccount.id.desc())
+        )
+        result = await db.execute(stmt)
+        accounts_data = result.all()
+
+    if not accounts_data:
+        await message.answer("📲 No Telegram accounts connected yet.")
+        return
+
+    lines = [f"<b>📱 Connected Telegram Accounts ({len(accounts_data)})</b>\n"]
+    for acc, u in accounts_data:
+        username = f"@{u.username}" if u.username else u.full_name or "Unknown"
+        status_icon = "🟢" if acc.status == "ACTIVE" else "🔴"
+        lines.append(
+            f"• {status_icon} <code>{acc.phone_number}</code>\n"
+            f"  └ <b>User:</b> {username} (<code>{u.telegram_id}</code>)\n"
+            f"  └ <b>Status:</b> {acc.status} | <b>Interval:</b> {acc.interval_minutes}m"
+        )
+
+    await message.answer("\n".join(lines))
+
 
 
 @router.message(Command("cleargroupalerts"))

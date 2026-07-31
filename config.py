@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     
     # App Settings
     MAX_ACCOUNTS_PER_USER: int = 15
+    MAX_CONCURRENT_BROADCASTS: int = 20
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     

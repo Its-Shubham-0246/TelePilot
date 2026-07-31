@@ -14,6 +14,8 @@ from services.subscription_service import subscription_service
 from services.mtproto_service import mtproto_service
 from services.group_discovery_service import check_and_alert_new_groups
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,13 @@ async def _notify_user(telegram_id: int, text: str):
 class SchedulerService:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
+        self._semaphore: Optional[asyncio.Semaphore] = None
+
+    @property
+    def account_semaphore(self) -> asyncio.Semaphore:
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_BROADCASTS)
+        return self._semaphore
 
     def start(self):
         if not self.scheduler.running:
@@ -122,11 +131,12 @@ class SchedulerService:
         await asyncio.gather(*account_tasks, return_exceptions=True)
 
     async def _process_single_account(self, account_id: int, schedule_id: int, user_telegram_id: Optional[int]):
-        """Processes a single account broadcast with isolated session and staggered startup safety."""
-        async with async_session_factory() as db:
-            account = await db.get(TelegramAccount, account_id)
-            if not account or not account.is_active or not account.auto_group_enabled:
-                return
+        """Processes a single account broadcast with concurrency semaphore, isolated session and staggered startup safety."""
+        async with self.account_semaphore:
+            async with async_session_factory() as db:
+                account = await db.get(TelegramAccount, account_id)
+                if not account or not account.is_active or not account.auto_group_enabled:
+                    return
 
             now = datetime.utcnow()
 

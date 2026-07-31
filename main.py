@@ -30,14 +30,11 @@ logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
 async def start_bot():
     logger.info("Initializing Telegram Bot...")
     # Clear any active webhooks or stuck updates so long polling gets messages immediately
-    for attempt in range(10):
-        try:
-            await bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Cleared old Telegram webhooks and pending updates.")
-            break
-        except Exception as e:
-            logger.warning(f"delete_webhook attempt {attempt+1} failed: {e}")
-            await asyncio.sleep(3)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared old Telegram webhooks and pending updates.")
+    except Exception as e:
+        logger.warning(f"delete_webhook failed: {e}")
 
     # Set official Telegram Bot Bio & Description (featuring 10,000+ Users badge)
     try:
@@ -47,36 +44,33 @@ async def start_bot():
     except Exception as desc_err:
         logger.warning(f"Failed to set bot descriptions: {desc_err}")
 
-
     # Register subscription gate middleware
     dp.message.middleware(SubscriptionGateMiddleware())
     main_router = setup_routers()
     dp.include_router(main_router)
 
     # Start polling — retry on TelegramConflictError (two instances during Railway rolling deploy)
-    for attempt in range(10):
+    for attempt in range(5):
         try:
             logger.info(f"Starting bot polling (attempt {attempt+1})...")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
             break
         except Exception as e:
             if "Conflict" in str(e) or "getUpdates" in str(e):
-                wait = 5 * (attempt + 1)
-                logger.warning(f"Telegram conflict detected (old instance still running). Retrying in {wait}s...")
-                await asyncio.sleep(wait)
+                logger.warning(f"Telegram conflict detected (old instance shutting down). Retrying in 3s...")
+                await asyncio.sleep(3)
             else:
                 logger.error(f"Bot polling error: {e}")
                 raise
 
 
-
-
 async def start_api():
     logger.info("Initializing FastAPI Backend Service...")
+    port = int(os.getenv("PORT", settings.PORT))
     config = uvicorn.Config(
         app=fastapi_app,
-        host=settings.HOST,
-        port=settings.PORT,
+        host="0.0.0.0",
+        port=port,
         log_level="info"
     )
     server = uvicorn.Server(config)
@@ -101,15 +95,6 @@ async def main():
 
     # Start APScheduler background engine
     scheduler_service.start()
-
-    # Register graceful shutdown signal handlers for Railway deploys
-    import signal
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, lambda: scheduler_service.stop())
-        except (NotImplementedError, RuntimeError):
-            pass
 
     try:
         # Run Bot Polling and FastAPI server concurrently

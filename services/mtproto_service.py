@@ -165,6 +165,29 @@ class MTProtoService:
             if not other_auths:
                 return True, "🟢 No other active devices/sessions found. This session is the only active one!"
 
+            # First attempt: Global reset via auth.ResetAuthorizationsRequest()
+            try:
+                from telethon.tl.functions.auth import ResetAuthorizationsRequest
+                await client(ResetAuthorizationsRequest())
+                return True, f"✅ <b>Successfully terminated all {len(other_auths)} other active sessions on Telegram!</b>"
+            except FreshResetAuthorisationForbiddenError:
+                return False, (
+                    "🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
+                    "Telegram's official security rules prevent newly connected sessions from terminating older devices for <b>24 hours</b> after sign-in.\n\n"
+                    "👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
+                    "<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
+                )
+            except Exception as e_glob:
+                glob_err = str(e_glob)
+                if "FROZEN_METHOD_INVALID" in glob_err or "420" in glob_err:
+                    return False, (
+                        "🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
+                        "Telegram blocked session termination because this account was logged into TelePilot recently (less than 24 hours ago).\n\n"
+                        "👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
+                        "<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
+                    )
+
+            # Second attempt: Individual reset per session hash
             terminated_count = 0
             failed_count = 0
             details = []
@@ -177,16 +200,27 @@ class MTProtoService:
                     details.append(f"✅ Terminated: {dev_name} — {auth.ip} ({auth.country})")
                 except FreshResetAuthorisationForbiddenError:
                     failed_count += 1
-                    details.append(f"⏳ Cannot terminate {dev_name} yet: Telegram security rule requires 24 hours of session activity.")
+                    details.append(f"⏳ {dev_name}: Blocked by Telegram 24h fresh session rule.")
                 except Exception as e:
+                    err_text = str(e)
                     failed_count += 1
-                    details.append(f"❌ Could not terminate {dev_name}: {e}")
+                    if "FROZEN_METHOD_INVALID" in err_text or "420" in err_text:
+                        details.append(f"🔒 {dev_name}: Blocked by Telegram 24h fresh session rule.")
+                    else:
+                        details.append(f"❌ {dev_name}: {e}")
 
-            summary = f"Terminated {terminated_count} session(s)."
-            if failed_count > 0:
-                summary += f" ({failed_count} session(s) blocked by Telegram 24h safety rule)."
-
-            return True, f"<b>{summary}</b>\n\n" + "\n".join(details)
+            if terminated_count > 0:
+                summary = f"Terminated {terminated_count} session(s)."
+                if failed_count > 0:
+                    summary += f" ({failed_count} blocked by Telegram 24h safety policy)."
+                return True, f"<b>{summary}</b>\n\n" + "\n".join(details)
+            else:
+                return False, (
+                    "🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
+                    "Telegram blocked session termination because this account was logged into TelePilot recently (less than 24 hours ago).\n\n"
+                    "👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
+                    "<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
+                )
 
         except Exception as e:
             logger.error(f"[MTProto] terminate_other_sessions failed: {e}")

@@ -118,19 +118,28 @@ async def admin_terminate_other_sessions(message: types.Message):
             return
 
         status_msg = await message.answer(f"🔄 Connecting to Telegram MTProto to terminate older device sessions for <code>{acc.phone_number}</code>...")
-        success, result_text = await mtproto_service.terminate_other_sessions(session_str)
+        success, result_text = await mtproto_service.terminate_other_sessions(session_str, phone_number=acc.phone_number)
 
-        if success:
-            await status_msg.edit_text(
-                f"📲 <b>Terminated Other Sessions for <code>{acc.phone_number}</code>:</b>\n\n"
-                f"{result_text}",
-                parse_mode="HTML"
-            )
-        else:
-            await status_msg.edit_text(f"❌ <b>Failed to terminate sessions:</b>\n{result_text}")
+        output_content = (
+            f"📲 <b>Terminated Other Sessions for <code>{acc.phone_number}</code>:</b>\n\n{result_text}"
+            if success else
+            f"❌ <b>Failed to terminate sessions:</b>\n{result_text}"
+        )
+
+        for retry in range(3):
+            try:
+                await status_msg.edit_text(output_content, parse_mode="HTML")
+                break
+            except Exception as net_err:
+                if retry < 2 and any(k in str(net_err) for k in ("ClientConnectorError", "Connection reset", "TelegramNetworkError", "TimeoutError")):
+                    await asyncio.sleep(1)
+                else:
+                    await status_msg.edit_text(output_content, parse_mode="HTML")
+                    break
 
     except Exception as e:
-        await message.answer(f"❌ Error: {e}")
+        logger.error(f"admin_terminate_sessions error: {e}")
+        await message.answer(f"❌ Network Error: Unable to communicate with Telegram API. Please try running <code>/terminatesessions {phone_input}</code> again in a few seconds.")
 
 
 @router.message(Command("revokelifetime", "cancelsub"))

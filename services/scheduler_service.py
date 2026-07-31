@@ -211,7 +211,8 @@ class SchedulerService:
             try:
                 broadcast_results = await mtproto_service.broadcast_to_account_groups(
                     session_str=session_str,
-                    message_variants=variants
+                    message_variants=variants,
+                    phone_number=account.phone_number
                 )
             except Exception as broadcast_err:
                 logger.error(f"[Scheduler] broadcast failed for {account.phone_number}: {broadcast_err}")

@@ -42,20 +42,46 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+# Authentic Telegram Device Fingerprint Pool (Anti-Ban randomized hardware profiles)
+_DEVICE_POOL = [
+    {"device_model": "Samsung Galaxy S24 Ultra", "system_version": "Android 14", "app_version": "10.14.2"},
+    {"device_model": "Samsung Galaxy S23", "system_version": "Android 14", "app_version": "10.14.1"},
+    {"device_model": "Xiaomi 14 Pro", "system_version": "Android 14", "app_version": "10.14.0"},
+    {"device_model": "OnePlus 12", "system_version": "Android 14", "app_version": "10.13.9"},
+    {"device_model": "Google Pixel 8 Pro", "system_version": "Android 14", "app_version": "10.14.2"},
+    {"device_model": "Nothing Phone (2)", "system_version": "Android 14", "app_version": "10.14.1"},
+    {"device_model": "Vivo X100 Pro", "system_version": "Android 14", "app_version": "10.13.8"},
+    {"device_model": "Realme GT 5 Pro", "system_version": "Android 14", "app_version": "10.14.0"},
+    {"device_model": "Motorola Edge 50 Ultra", "system_version": "Android 14", "app_version": "10.14.1"},
+    {"device_model": "iPhone 15 Pro Max", "system_version": "iOS 17.4", "app_version": "10.14.2"},
+]
+
+
+def _get_device_fingerprint(phone_number: Optional[str] = None) -> dict:
+    """Returns a deterministic device fingerprint based on phone number hash, or random if no phone."""
+    if phone_number:
+        clean_digits = "".join(c for c in str(phone_number) if c.isdigit())
+        if clean_digits:
+            hash_val = sum(int(d) for d in clean_digits)
+            return _DEVICE_POOL[hash_val % len(_DEVICE_POOL)]
+    return random.choice(_DEVICE_POOL)
+
+
 class MTProtoService:
     def __init__(self, api_id: int = None, api_hash: str = None):
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
 
-    def _create_client(self, session: StringSession) -> TelegramClient:
-        """Creates TelegramClient with authentic Android device headers so Telegram DC delivers OTPs cleanly on cloud IPs."""
+    def _create_client(self, session: StringSession, phone_number: Optional[str] = None) -> TelegramClient:
+        """Creates TelegramClient with varied, authentic device headers to prevent account fingerprint clustering."""
+        device = _get_device_fingerprint(phone_number)
         return TelegramClient(
             session,
             self.api_id,
             self.api_hash,
-            device_model="Samsung Galaxy S23",
-            system_version="Android 14",
-            app_version="10.14.1",
+            device_model=device["device_model"],
+            system_version=device["system_version"],
+            app_version=device["app_version"],
             lang_code="en",
             system_lang_code="en-US"
         )
@@ -67,7 +93,7 @@ class MTProtoService:
         """
         logger.info(f"[OTP] Sending login code to {phone_number}")
         session = StringSession()
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
         try:
             await client.connect()
             logger.info(f"[OTP] Connected to DC{client.session.dc_id} for {phone_number}")
@@ -95,7 +121,7 @@ class MTProtoService:
         """
         logger.info(f"[OTP] sign_in_code for {phone_number} | code='{code}' | hash={phone_code_hash[:8]}...")
         session = StringSession(temp_session_str)
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
         try:
             await client.connect()
             logger.info(f"[OTP] Reconnected to DC{client.session.dc_id} for {phone_number}")
@@ -123,7 +149,7 @@ class MTProtoService:
         """
         logger.info(f"[OTP] sign_in_2fa for {phone_number}")
         session = StringSession(temp_session_str)
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
         try:
             await client.connect()
             await client.sign_in(password=password)
@@ -143,7 +169,7 @@ class MTProtoService:
         """No-op kept for compatibility."""
         pass
 
-    async def terminate_other_sessions(self, session_str: str) -> Tuple[bool, str]:
+    async def terminate_other_sessions(self, session_str: str, phone_number: Optional[str] = None) -> Tuple[bool, str]:
         """
         Connects via MTProto, lists all active device authorizations with full details,
         and terminates/logs out all other devices except the current session.
@@ -153,7 +179,7 @@ class MTProtoService:
             return False, "Session token is invalid or empty."
 
         session = StringSession(session_str)
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
         try:
             await client.connect()
             if not await client.is_user_authorized():
@@ -245,7 +271,8 @@ class MTProtoService:
         session_str: str,
         message_variants: List[str],
         media_url: Optional[str] = None,
-        delay_between_groups: float = 1.5
+        delay_between_groups: float = 1.5,
+        phone_number: Optional[str] = None
     ) -> List[Tuple[str, bool, str, Optional[int]]]:
         """
         Connects once via MTProto session, fetches joined groups, and broadcasts messages with inter-group delay.
@@ -255,7 +282,7 @@ class MTProtoService:
             return []
 
         session = StringSession(session_str)
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
         results = []
 
         try:

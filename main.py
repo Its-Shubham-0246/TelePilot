@@ -102,13 +102,22 @@ async def main():
     # Start APScheduler background engine
     scheduler_service.start()
 
+    # Register graceful shutdown signal handlers for Railway deploys
+    import signal
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, lambda: scheduler_service.stop())
+        except (NotImplementedError, RuntimeError):
+            pass
+
     try:
         # Run Bot Polling and FastAPI server concurrently
         await asyncio.gather(
             start_bot(),
             start_api()
         )
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down services...")
     finally:
         scheduler_service.stop()

@@ -76,10 +76,9 @@ async def start_api():
     await server.serve()
 
 
-async def main():
+async def background_startup():
     db_type = "PostgreSQL" if "postgresql" in settings.DATABASE_URL or "postgres" in settings.DATABASE_URL else "SQLite"
-    logger.info(f"Starting Telegram SaaS System... (DB Engine: {db_type})")
-    # Initialize Database tables
+    logger.info(f"Starting Telegram SaaS System background services... (DB Engine: {db_type})")
     await init_db()
 
     # Enforce 5 accounts max limit for all active lifetime subscriptions
@@ -95,16 +94,23 @@ async def main():
     # Start APScheduler background engine
     scheduler_service.start()
 
-    # Launch bot polling in background task so API server binds to PORT immediately for Railway healthcheck
-    bot_task = asyncio.create_task(start_bot())
+    # Start Telegram Bot Polling
+    await start_bot()
+
+
+async def main():
+    logger.info("Launching TelePilot SaaS Application...")
+
+    # Start background initialization (DB, lifetime limits sweep, scheduler, bot polling)
+    bg_task = asyncio.create_task(background_startup())
 
     try:
-        # Run FastAPI Web Server (listens on PORT)
+        # Start Web Server IMMEDIATELY so Railway Healthcheck binds to PORT in 0.01s
         await start_api()
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down services...")
     finally:
-        bot_task.cancel()
+        bg_task.cancel()
         scheduler_service.stop()
 
 

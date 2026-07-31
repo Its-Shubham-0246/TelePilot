@@ -69,9 +69,10 @@ async def start_automation(message: types.Message):
                 acc.auto_group_enabled = True
             enabled_accounts = all_accounts
 
-        # Reset last_used_at = None so messages dispatch IMMEDIATELY on start
+        # Only reset last_used_at if account has never been run before
         for acc in enabled_accounts:
-            acc.last_used_at = None
+            if not acc.last_used_at:
+                acc.last_used_at = None
 
         # Get or create schedule
         sched = (await db.execute(select(Schedule).where(Schedule.user_id == user.id))).scalars().first()
@@ -91,8 +92,7 @@ async def start_automation(message: types.Message):
     await message.answer(
         f"🚀 <b>Auto Group Automation Started!</b>\n\n"
         f"<b>Enabled Accounts:</b> {len(enabled_accounts)} account(s)\n\n"
-        f"⚡ <b>Immediate Dispatch Triggered:</b> The bot is fetching all joined groups and sending your messages right now!\n\n"
-        f"After this first run, messages will repeat automatically according to each account's configured timer interval.",
+        f"⚡ <b>Automation Active:</b> Messages will repeat automatically according to each account's configured timer interval.",
         reply_markup=get_main_menu_keyboard()
     )
 

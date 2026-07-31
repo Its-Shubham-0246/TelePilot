@@ -156,7 +156,9 @@ async def handle_timer_preset_click(callback: types.CallbackQuery, state: FSMCon
     async with async_session_factory() as db:
         acc = await db.get(TelegramAccount, acc_id)
         if acc:
+            from datetime import datetime
             acc.interval_minutes = minutes
+            acc.last_used_at = datetime.utcnow()
             await db.commit()
             phone = acc.phone_number
 
@@ -193,7 +195,9 @@ async def process_account_timer(message: types.Message, state: FSMContext):
     async with async_session_factory() as db:
         acc = await db.get(TelegramAccount, acc_id)
         if acc:
+            from datetime import datetime
             acc.interval_minutes = minutes
+            acc.last_used_at = datetime.utcnow()
             await db.commit()
             phone = acc.phone_number
 

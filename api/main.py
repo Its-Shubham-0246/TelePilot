@@ -27,6 +27,7 @@ async def on_startup():
     await init_db()
 
 
+@app.get("/")
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "Telegram SaaS Backend"}

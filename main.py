@@ -96,15 +96,16 @@ async def main():
     # Start APScheduler background engine
     scheduler_service.start()
 
+    # Launch bot polling in background task so API server binds to PORT immediately for Railway healthcheck
+    bot_task = asyncio.create_task(start_bot())
+
     try:
-        # Run Bot Polling and FastAPI server concurrently
-        await asyncio.gather(
-            start_bot(),
-            start_api()
-        )
+        # Run FastAPI Web Server (listens on PORT)
+        await start_api()
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down services...")
     finally:
+        bot_task.cancel()
         scheduler_service.stop()
 
 

@@ -22,12 +22,7 @@ app.include_router(admin.router)
 app.include_router(payments.router)
 
 
-@app.on_event("startup")
-async def on_startup():
-    await init_db()
-
-
 @app.get("/")
 @app.get("/health")
-async def health_check():
+def health_check():
     return {"status": "healthy", "service": "Telegram SaaS Backend"}

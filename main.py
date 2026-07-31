@@ -49,19 +49,18 @@ async def start_bot():
     main_router = setup_routers()
     dp.include_router(main_router)
 
-    # Start polling — retry on TelegramConflictError (two instances during Railway rolling deploy)
-    for attempt in range(5):
+    # Start polling loop with automatic retry
+    while True:
         try:
-            logger.info(f"Starting bot polling (attempt {attempt+1})...")
+            logger.info("Starting bot polling...")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
             break
+        except asyncio.CancelledError:
+            logger.info("Bot polling cancelled.")
+            break
         except Exception as e:
-            if "Conflict" in str(e) or "getUpdates" in str(e):
-                logger.warning(f"Telegram conflict detected (old instance shutting down). Retrying in 3s...")
-                await asyncio.sleep(3)
-            else:
-                logger.error(f"Bot polling error: {e}")
-                raise
+            logger.warning(f"Bot polling exception: {e}. Retrying in 5 seconds...")
+            await asyncio.sleep(5)
 
 
 async def start_api():

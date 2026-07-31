@@ -58,8 +58,49 @@ class SchedulerService:
             self.scheduler.shutdown()
             logger.info("APScheduler engine stopped.")
 
+    async def claim_leadership(self) -> bool:
+        """
+        Claims or updates the active leader lock in the database for this container instance.
+        Returns True if this container is the active LEADER.
+        """
+        from models.system_lock import SystemLock, INSTANCE_ID
+        try:
+            async with async_session_factory() as db:
+                lock = await db.get(SystemLock, "scheduler_leader")
+                now = datetime.utcnow()
+                if not lock:
+                    lock = SystemLock(key="scheduler_leader", instance_id=INSTANCE_ID, updated_at=now)
+                    db.add(lock)
+                else:
+                    lock.instance_id = INSTANCE_ID
+                    lock.updated_at = now
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.warning(f"[SchedulerLock] claim_leadership warning: {e}")
+            return True
+
+    async def is_leader(self) -> bool:
+        """
+        Checks if this container instance is currently the registered leader.
+        """
+        from models.system_lock import SystemLock, INSTANCE_ID
+        try:
+            async with async_session_factory() as db:
+                lock = await db.get(SystemLock, "scheduler_leader")
+                if not lock:
+                    return True
+                return lock.instance_id == INSTANCE_ID
+        except Exception as e:
+            return True
+
     async def process_active_schedules(self):
         """Iterates over active schedules and runs group broadcasts for enabled accounts in parallel."""
+        # Leader Lock Check — prevent dual-container execution during Railway rolling deploys
+        if not await self.is_leader():
+            logger.info("[SchedulerLock] Skipping schedule processing — another container instance is active leader.")
+            return
+
         try:
             # Step 1: Collect active schedule IDs using a short-lived session
             async with async_session_factory() as db:

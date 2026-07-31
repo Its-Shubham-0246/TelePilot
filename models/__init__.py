@@ -7,6 +7,7 @@ from models.schedule import Schedule
 from models.job_log import JobLog
 from models.payment import Payment
 from models.discovered_group import DiscoveredGroup
+from models.system_lock import SystemLock, INSTANCE_ID
 
 __all__ = [
     "Base",
@@ -18,4 +19,6 @@ __all__ = [
     "JobLog",
     "Payment",
     "DiscoveredGroup",
+    "SystemLock",
+    "INSTANCE_ID",
 ]

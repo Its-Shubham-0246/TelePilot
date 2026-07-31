@@ -77,10 +77,28 @@ async def start_api():
     await server.serve()
 
 
+async def heartbeat_loop():
+    """Heartbeat loop to claim & maintain Container Leader Lock during Railway rolling deploys."""
+    while True:
+        try:
+            await scheduler_service.claim_leadership()
+        except Exception:
+            pass
+        await asyncio.sleep(10)
+
+
 async def background_startup():
     db_type = "PostgreSQL" if "postgresql" in settings.DATABASE_URL or "postgres" in settings.DATABASE_URL else "SQLite"
     logger.info(f"Starting Telegram SaaS System background services... (DB Engine: {db_type})")
     await init_db()
+
+    # Claim Container Leadership immediately after DB init
+    try:
+        await scheduler_service.claim_leadership()
+        asyncio.create_task(heartbeat_loop())
+        logger.info("Claimed Container Leader Lock for scheduler execution.")
+    except Exception as lock_err:
+        logger.warning(f"Leader lock claim warning: {lock_err}")
 
     # Enforce 5 accounts max limit for all active lifetime subscriptions
     try:

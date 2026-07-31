@@ -157,12 +157,12 @@ class SchedulerService:
                 logger.info(f"[Scheduler] {account.phone_number} status={account.status} — skipping")
                 return
 
-            # Check interval timer (with 2-second grace window for exact timing)
+            # Check interval timer (strict check: full interval_minutes * 60 seconds required)
             if account.last_used_at:
                 seconds_since_last = (now - account.last_used_at).total_seconds()
-                required_seconds = account.interval_minutes * 60 - 2
+                required_seconds = account.interval_minutes * 60.0
                 if seconds_since_last < required_seconds:
-                    remaining_mins = round((account.interval_minutes * 60 - seconds_since_last) / 60.0, 1)
+                    remaining_mins = round((required_seconds - seconds_since_last) / 60.0, 1)
                     logger.info(f"[Scheduler] {account.phone_number} — {remaining_mins}m until next send")
                     return
 

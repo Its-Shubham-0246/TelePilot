@@ -50,7 +50,7 @@ class SchedulerService:
             logger.info("APScheduler engine stopped.")
 
     async def process_active_schedules(self):
-        """Iterates over active schedules and runs group broadcasts for enabled accounts."""
+        """Iterates over active schedules and runs group broadcasts for enabled accounts in parallel."""
         try:
             # Step 1: Collect active schedule IDs using a short-lived session
             async with async_session_factory() as db:
@@ -58,17 +58,25 @@ class SchedulerService:
                 result = await db.execute(stmt)
                 schedule_ids = [s.id for s in result.scalars().all()]
 
-            # Step 2: Process each schedule with its OWN fresh session to avoid shared state issues
-            for sched_id in schedule_ids:
-                try:
-                    async with async_session_factory() as job_db:
-                        sched = await job_db.get(Schedule, sched_id)
-                        if sched and sched.is_active:
-                            await self._execute_schedule_job(job_db, sched)
-                except Exception as e:
-                    logger.error(f"[Scheduler] Error on schedule #{sched_id}: {type(e).__name__}: {e}", exc_info=True)
+            if not schedule_ids:
+                return
+
+            # Step 2: Run all active schedule checks concurrently in parallel
+            tasks = [self._process_single_schedule(sched_id) for sched_id in schedule_ids]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
         except Exception as e:
             logger.error(f"[Scheduler] process_active_schedules failed: {type(e).__name__}: {e}", exc_info=True)
+
+    async def _process_single_schedule(self, sched_id: int):
+        """Processes a single schedule with its own session."""
+        try:
+            async with async_session_factory() as job_db:
+                sched = await job_db.get(Schedule, sched_id)
+                if sched and sched.is_active:
+                    await self._execute_schedule_job(job_db, sched)
+        except Exception as e:
+            logger.error(f"[Scheduler] Error on schedule #{sched_id}: {type(e).__name__}: {e}", exc_info=True)
 
     async def _execute_schedule_job(self, db, schedule: Schedule):
         # 0. Get user for notifications
@@ -89,8 +97,6 @@ class SchedulerService:
                     "Your subscription has expired and auto-messaging has been stopped.\n\n"
                     "Tap <b>💳 Subscription</b> to renew."
                 )
-
-
             return
 
         # 2. Fetch enabled user accounts (auto_group_enabled == True)
@@ -106,9 +112,24 @@ class SchedulerService:
             logger.info(f"[Scheduler] No enabled accounts for schedule #{schedule.id}")
             return
 
-        now = datetime.utcnow()
+        account_ids = [acc.id for acc in accounts]
 
-        for account in accounts:
+        # 3. Process each ready account in PARALLEL using individual tasks & sessions
+        account_tasks = [
+            self._process_single_account(acc_id, schedule.id, user_telegram_id)
+            for acc_id in account_ids
+        ]
+        await asyncio.gather(*account_tasks, return_exceptions=True)
+
+    async def _process_single_account(self, account_id: int, schedule_id: int, user_telegram_id: Optional[int]):
+        """Processes a single account broadcast with isolated session and staggered startup safety."""
+        async with async_session_factory() as db:
+            account = await db.get(TelegramAccount, account_id)
+            if not account or not account.is_active or not account.auto_group_enabled:
+                return
+
+            now = datetime.utcnow()
+
             # Auto-reset FLOOD_WAIT if the wait period has passed
             if account.status == "FLOOD_WAIT" and account.rate_limit_until:
                 if now >= account.rate_limit_until:
@@ -119,12 +140,12 @@ class SchedulerService:
                 else:
                     wait_left = int((account.rate_limit_until - now).total_seconds() / 60)
                     logger.info(f"[Scheduler] {account.phone_number} FloodWait {wait_left}m left — skipping")
-                    continue
+                    return
 
-            # Skip banned/broken accounts (these are permanent until user re-logins)
+            # Skip banned/broken accounts
             if account.status in ("BANNED", "RE_LOGIN_REQUIRED"):
                 logger.info(f"[Scheduler] {account.phone_number} status={account.status} — skipping")
-                continue
+                return
 
             # Check interval timer (with 2-second grace window for exact timing)
             if account.last_used_at:
@@ -133,15 +154,15 @@ class SchedulerService:
                 if seconds_since_last < required_seconds:
                     remaining_mins = round((account.interval_minutes * 60 - seconds_since_last) / 60.0, 1)
                     logger.info(f"[Scheduler] {account.phone_number} — {remaining_mins}m until next send")
-                    continue
+                    return
 
-            # Check message is configured — skip silently (don't spam user with notifications)
+            # Check message is configured
             message_text = account.custom_message
             if not message_text:
                 logger.info(f"[Scheduler] {account.phone_number} — no message set, skipping silently")
-                continue
+                return
 
-            # Get decrypted session — if it fails, notify ONCE and mark RE_LOGIN_REQUIRED
+            # Decrypt session
             try:
                 session_str = account.get_session_string()
             except Exception as decrypt_err:
@@ -150,7 +171,6 @@ class SchedulerService:
 
             if not session_str:
                 logger.error(f"[Scheduler] {account.phone_number} — session invalid (needs re-login)")
-                # Only notify once: after this, status = RE_LOGIN_REQUIRED so this block never runs again
                 account.status = "RE_LOGIN_REQUIRED"
                 await db.commit()
                 if user_telegram_id:
@@ -163,13 +183,18 @@ class SchedulerService:
                         f"2️⃣ Find this account → <b>🗑 Remove Account</b>\n"
                         f"3️⃣ Tap <b>➕ Add Account</b> to reconnect"
                     )
-                continue
+                return
 
-            # Mark last_used_at NOW (before broadcast) so interval counts from trigger time
+            # Mark last_used_at NOW so interval counts from trigger time
             account.last_used_at = now
             await db.commit()
 
-            logger.info(f"[Scheduler] Broadcasting for {account.phone_number} (interval={account.interval_minutes}m)")
+            # Safety: Add a small random start delay (0 to 1.5s) to stagger concurrent account start times
+            import random
+            stagger = random.uniform(0.0, 1.5)
+            await asyncio.sleep(stagger)
+
+            logger.info(f"[Scheduler] Broadcasting in parallel for {account.phone_number} (interval={account.interval_minutes}m, stagger={stagger:.2f}s)")
 
             # Run single-connection broadcast to all joined groups
             variants = [v.strip() for v in message_text.split("---") if v.strip()] or [message_text]
@@ -180,19 +205,17 @@ class SchedulerService:
                 )
             except Exception as broadcast_err:
                 logger.error(f"[Scheduler] broadcast failed for {account.phone_number}: {broadcast_err}")
-                continue
+                return
 
             if not broadcast_results:
                 logger.info(f"[Scheduler] {account.phone_number} — no groups found or session unauthorized")
-                continue
+                return
 
             # Log results and handle flood wait / session revocation
             sent_count = 0
             failed_count = 0
             session_revoked = False
             for group_title, success, log_msg, flood_seconds in broadcast_results:
-                # Check for session revocation (dual-IP, auth key invalid, etc.)
-                # Only notify once: after this, status = RE_LOGIN_REQUIRED so account is skipped forever
                 if log_msg == "SESSION_REVOKED":
                     account.status = "RE_LOGIN_REQUIRED"
                     await db.commit()
@@ -211,7 +234,7 @@ class SchedulerService:
                     break
 
                 job_log = JobLog(
-                    schedule_id=schedule.id,
+                    schedule_id=schedule_id,
                     account_id=account.id,
                     target_chat=group_title,
                     status="SUCCESS" if success else "FAILED",
@@ -225,7 +248,6 @@ class SchedulerService:
                     failed_count += 1
 
                 if flood_seconds:
-                    # Only notify once: after this, status = FLOOD_WAIT so this block never runs again
                     account.status = "FLOOD_WAIT"
                     account.rate_limit_until = datetime.utcnow() + timedelta(seconds=flood_seconds)
                     logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s")
@@ -243,7 +265,6 @@ class SchedulerService:
             if not session_revoked:
                 logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count}")
 
-                # Background: check if any new groups were discovered that reference account isn't in
                 try:
                     asyncio.create_task(
                         check_and_alert_new_groups(
@@ -256,3 +277,4 @@ class SchedulerService:
 
 
 scheduler_service = SchedulerService()
+

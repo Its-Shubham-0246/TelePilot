@@ -228,6 +228,15 @@ class MTProtoService:
             final_msg = f"{result_title}\n\n{summary_header}\n" + "\n\n".join(device_blocks)
             return (terminated_count > 0), final_msg
 
+        except Exception as e:
+            logger.error(f"[MTProto] terminate_other_sessions failed: {e}")
+            return False, f"Failed to terminate sessions: {e}"
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
 
 
 

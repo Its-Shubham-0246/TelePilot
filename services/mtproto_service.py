@@ -6,6 +6,7 @@ from typing import Tuple, Optional, List
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.functions.account import GetAuthorizationsRequest, ResetAuthorizationRequest
 from telethon.errors import (
     FloodWaitError,
     SlowModeWaitError,
@@ -21,6 +22,7 @@ from telethon.errors import (
     UserNotParticipantError,
     ChannelPrivateError,
     PeerIdInvalidError,
+    FreshResetAuthorisationForbiddenError,
 )
 
 # Permanent error keywords — these should never be retried (no amount of waiting will fix them)
@@ -140,6 +142,60 @@ class MTProtoService:
     async def cancel_pending_login(self, phone_number: str):
         """No-op kept for compatibility."""
         pass
+
+    async def terminate_other_sessions(self, session_str: str) -> Tuple[bool, str]:
+        """
+        Connects via MTProto, lists all active device authorizations,
+        and terminates/logs out all other devices except the current session.
+        Returns (success, result_message).
+        """
+        if not session_str:
+            return False, "Session token is invalid or empty."
+
+        session = StringSession(session_str)
+        client = self._create_client(session)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                return False, "Session expired or user unauthorized."
+
+            authorizations = await client(GetAuthorizationsRequest())
+            other_auths = [a for a in authorizations.authorizations if not a.current]
+
+            if not other_auths:
+                return True, "🟢 No other active devices/sessions found. This session is the only active one!"
+
+            terminated_count = 0
+            failed_count = 0
+            details = []
+
+            for auth in other_auths:
+                dev_name = f"<b>{auth.device_model}</b> ({auth.platform} {auth.system_version})"
+                try:
+                    await client(ResetAuthorizationRequest(hash=auth.hash))
+                    terminated_count += 1
+                    details.append(f"✅ Terminated: {dev_name} — {auth.ip} ({auth.country})")
+                except FreshResetAuthorisationForbiddenError:
+                    failed_count += 1
+                    details.append(f"⏳ Cannot terminate {dev_name} yet: Telegram security rule requires 24 hours of session activity.")
+                except Exception as e:
+                    failed_count += 1
+                    details.append(f"❌ Could not terminate {dev_name}: {e}")
+
+            summary = f"Terminated {terminated_count} session(s)."
+            if failed_count > 0:
+                summary += f" ({failed_count} session(s) blocked by Telegram 24h safety rule)."
+
+            return True, f"<b>{summary}</b>\n\n" + "\n".join(details)
+
+        except Exception as e:
+            logger.error(f"[MTProto] terminate_other_sessions failed: {e}")
+            return False, f"Failed to terminate sessions: {e}"
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
 
 

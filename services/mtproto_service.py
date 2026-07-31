@@ -145,7 +145,7 @@ class MTProtoService:
 
     async def terminate_other_sessions(self, session_str: str) -> Tuple[bool, str]:
         """
-        Connects via MTProto, lists all active device authorizations,
+        Connects via MTProto, lists all active device authorizations with full details,
         and terminates/logs out all other devices except the current session.
         Returns (success, result_message).
         """
@@ -160,67 +160,73 @@ class MTProtoService:
                 return False, "Session expired or user unauthorized."
 
             authorizations = await client(GetAuthorizationsRequest())
-            other_auths = [a for a in authorizations.authorizations if not a.current]
+            all_auths = authorizations.authorizations
+            other_auths = [a for a in all_auths if not a.current]
 
             if not other_auths:
-                return True, "🟢 No other active devices/sessions found. This session is the only active one!"
+                return True, "🟢 <b>No other active devices found.</b> This session is the only active one!"
 
-            # First attempt: Global reset via auth.ResetAuthorizationsRequest()
-            try:
-                from telethon.tl.functions.auth import ResetAuthorizationsRequest
-                await client(ResetAuthorizationsRequest())
-                return True, f"✅ <b>Successfully terminated all {len(other_auths)} other active sessions on Telegram!</b>"
-            except FreshResetAuthorisationForbiddenError:
-                return False, (
-                    "🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
-                    "Telegram's official security rules prevent newly connected sessions from terminating older devices for <b>24 hours</b> after sign-in.\n\n"
-                    "👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
-                    "<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
-                )
-            except Exception as e_glob:
-                glob_err = str(e_glob)
-                if "FROZEN_METHOD_INVALID" in glob_err or "420" in glob_err:
-                    return False, (
-                        "🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
-                        "Telegram blocked session termination because this account was logged into TelePilot recently (less than 24 hours ago).\n\n"
-                        "👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
-                        "<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
-                    )
-
-            # Second attempt: Individual reset per session hash
             terminated_count = 0
-            failed_count = 0
-            details = []
+            blocked_count = 0
+            device_blocks = []
 
-            for auth in other_auths:
-                dev_name = f"<b>{auth.device_model}</b> ({auth.platform} {auth.system_version})"
+            for idx, auth in enumerate(other_auths, start=1):
+                device = auth.device_model or "Unknown Device"
+                platform = f"{auth.platform} {auth.system_version}".strip() or "Unknown OS"
+                app_info = f"{auth.app_name} {auth.app_version}".strip() or "Telegram App"
+                ip_addr = auth.ip or "Unknown IP"
+                country = auth.country or "Unknown Location"
+                
+                # Format last active time if available
+                last_active_str = auth.date_active.strftime('%Y-%m-%d %H:%M UTC') if hasattr(auth, 'date_active') and auth.date_active else "Recently"
+
+                # Device icon based on platform/device type
+                icon = "📱" if "Android" in platform or "iOS" in platform or "iPhone" in device else ("💻" if "Windows" in platform or "Mac" in platform or "PC" in device else "🖥️")
+
+                status_str = ""
+
+                # Try resetting authorization by hash
                 try:
                     await client(ResetAuthorizationRequest(hash=auth.hash))
                     terminated_count += 1
-                    details.append(f"✅ Terminated: {dev_name} — {auth.ip} ({auth.country})")
+                    status_str = "✅ <b>Terminated & Logged Out</b>"
                 except FreshResetAuthorisationForbiddenError:
-                    failed_count += 1
-                    details.append(f"⏳ {dev_name}: Blocked by Telegram 24h fresh session rule.")
+                    blocked_count += 1
+                    status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
                 except Exception as e:
-                    err_text = str(e)
-                    failed_count += 1
-                    if "FROZEN_METHOD_INVALID" in err_text or "420" in err_text:
-                        details.append(f"🔒 {dev_name}: Blocked by Telegram 24h fresh session rule.")
+                    err_txt = str(e)
+                    if "FROZEN_METHOD_INVALID" in err_txt or "420" in err_txt:
+                        blocked_count += 1
+                        status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
                     else:
-                        details.append(f"❌ {dev_name}: {e}")
+                        blocked_count += 1
+                        status_str = f"❌ <b>Failed:</b> {err_txt}"
 
-            if terminated_count > 0:
-                summary = f"Terminated {terminated_count} session(s)."
-                if failed_count > 0:
-                    summary += f" ({failed_count} blocked by Telegram 24h safety policy)."
-                return True, f"<b>{summary}</b>\n\n" + "\n".join(details)
-            else:
-                return False, (
-                    "🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
-                    "Telegram blocked session termination because this account was logged into TelePilot recently (less than 24 hours ago).\n\n"
-                    "👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
-                    "<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
+                block = (
+                    f"<b>{idx}. {icon} {device}</b>\n"
+                    f"   ├ <b>OS/Platform:</b> {platform}\n"
+                    f"   ├ <b>App:</b> {app_info}\n"
+                    f"   ├ <b>IP Address:</b> <code>{ip_addr}</code> ({country})\n"
+                    f"   ├ <b>Last Active:</b> {last_active_str}\n"
+                    f"   └ <b>Status:</b> {status_str}"
                 )
+                device_blocks.append(block)
+
+            summary_header = f"<b>📱 Detected Active Devices ({len(other_auths)} Total):</b>\n"
+            if terminated_count > 0 and blocked_count == 0:
+                result_title = f"✅ <b>Successfully Terminated All {terminated_count} Other Devices!</b>"
+            elif terminated_count > 0 and blocked_count > 0:
+                result_title = f"⚠️ <b>Terminated {terminated_count} device(s), {blocked_count} device(s) blocked by Telegram 24h rule.</b>"
+            else:
+                result_title = (
+                    f"🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
+                    f"Telegram's official security rules prevent newly connected sessions from terminating older devices for <b>24 hours</b> after sign-in.\n\n"
+                    f"👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
+                    f"<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
+                )
+
+            final_msg = f"{result_title}\n\n{summary_header}\n" + "\n\n".join(device_blocks)
+            return (terminated_count > 0), final_msg
 
         except Exception as e:
             logger.error(f"[MTProto] terminate_other_sessions failed: {e}")

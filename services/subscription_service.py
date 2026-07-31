@@ -94,6 +94,40 @@ class SubscriptionService:
             await db.commit()
             return new_sub
 
+    async def enforce_user_account_limit(self, db: AsyncSession, user_id: int, max_limit: int = 5) -> List[str]:
+        """
+        Enforces max account limit for a user.
+        If connected accounts exceed max_limit, keeps the first max_limit accounts
+        and deletes/terminates excess accounts. Returns list of terminated phone numbers.
+        """
+        from models.account import TelegramAccount
+        stmt = select(TelegramAccount).where(TelegramAccount.user_id == user_id).order_by(TelegramAccount.id.asc())
+        accounts = (await db.execute(stmt)).scalars().all()
+
+        if len(accounts) <= max_limit:
+            return []
+
+        excess_accounts = accounts[max_limit:]
+        terminated_phones = [acc.phone_number for acc in excess_accounts]
+
+        for acc in excess_accounts:
+            await db.delete(acc)
+
+        await db.commit()
+        return terminated_phones
+
+    async def sweep_and_enforce_lifetime_limits(self, db: AsyncSession):
+        """Finds all active lifetime subscriptions, sets max_accounts=5, and terminates excess accounts."""
+        stmt = select(Subscription).where(
+            Subscription.status == "ACTIVE",
+            Subscription.plan_name.ilike("%Lifetime%")
+        )
+        subs = (await db.execute(stmt)).scalars().all()
+        for sub in subs:
+            sub.max_accounts = 5
+            await self.enforce_user_account_limit(db, sub.user_id, max_limit=5)
+        await db.commit()
+
 
 subscription_service = SubscriptionService()
 

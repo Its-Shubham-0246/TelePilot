@@ -474,29 +474,44 @@ async def admin_grant_lifetime(message: types.Message):
         for s in existing_subs:
             s.status = "SUPERSEDED"
 
-        # Create lifetime subscription — expires year 2099
+        from services.subscription_service import subscription_service
+
+        # Create lifetime subscription — max 5 accounts, expires year 2099
         lifetime_sub = Subscription(
             user_id=user.id,
             plan_name="Lifetime Access (Admin Grant)",
             status="ACTIVE",
             expires_at=datetime(2099, 12, 31, 23, 59, 59),
-            max_accounts=15,
+            max_accounts=5,
         )
         db.add(lifetime_sub)
         await db.commit()
 
+        # Enforce max 5 accounts limit for lifetime user — terminate any excess accounts beyond 5
+        terminated_phones = await subscription_service.enforce_user_account_limit(db, user.id, max_limit=5)
+
     username = f"@{user.username}" if user.username else user.full_name or str(user.telegram_id)
+    target_id = user.telegram_id
+
+    term_info = ""
+    if terminated_phones:
+        term_list = "\n".join([f"  • <code>{p}</code>" for p in terminated_phones])
+        term_info = f"\n\n⚠️ <b>Account Limit Enforced (Max 5):</b>\nKept first 5 accounts. Terminated {len(terminated_phones)} excess account(s):\n{term_list}"
 
     # Notify the granted user
     try:
-        await message.bot.send_message(
-            user.telegram_id,
+        user_term_text = ""
+        if terminated_phones:
+            user_term_text = f"\n\n⚠️ <i>Note: Lifetime plan allows maximum 5 accounts. The following excess accounts have been removed:\n" + "\n".join(f"• <code>{p}</code>" for p in terminated_phones) + "</i>"
 
+        await message.bot.send_message(
+            target_id,
             f"🎉 <b>Lifetime Access Granted!</b>\n\n"
             f"You have been given <b>permanent free access</b> to TelePilot Bot by the admin.\n\n"
             f"✅ All features unlocked\n"
-            f"✅ Up to 15 accounts\n"
-            f"✅ No expiry — valid forever\n\n"
+            f"✅ Up to 5 connected accounts\n"
+            f"✅ No expiry — valid forever\n"
+            f"{user_term_text}\n\n"
             f"Enjoy! 🚀"
         )
     except Exception:
@@ -505,10 +520,28 @@ async def admin_grant_lifetime(message: types.Message):
     await message.answer(
         f"✅ <b>Lifetime Access Granted!</b>\n\n"
         f"User: {username}\n"
-        f"Telegram ID: <code>{target_telegram_id}</code>\n"
+        f"Telegram ID: <code>{target_id}</code>\n"
         f"Plan: Lifetime Access (Admin Grant)\n"
-        f"Expires: Never (31 Dec 2099)\n\n"
+        f"Max Accounts: <b>5</b>\n"
+        f"Expires: Never (31 Dec 2099){term_info}\n\n"
         f"The user has been notified. ✉️"
+    )
+
+
+@router.message(Command("syncaccountlimits"))
+async def admin_sync_account_limits(message: types.Message):
+    """Admin: sweep all active lifetime subscriptions and enforce the 5 accounts limit across the entire database."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    from services.subscription_service import subscription_service
+    async with async_session_factory() as db:
+        await subscription_service.sweep_and_enforce_lifetime_limits(db)
+
+    await message.answer(
+        "✅ <b>Lifetime Account Limits Synced!</b>\n\n"
+        "All active Lifetime subscriptions have been updated to a max of 5 accounts, and any excess accounts beyond 5 have been terminated."
     )
 
 

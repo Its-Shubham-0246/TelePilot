@@ -47,12 +47,16 @@ async def start_add_account(message: types.Message, state: FSMContext):
             await message.answer("Please type /start first.")
             return
 
+        from services.subscription_service import subscription_service
+        sub = await subscription_service.get_active_subscription(db, user.id)
+        max_allowed = sub.max_accounts if sub else 15
+
         stmt_count = select(func.count(TelegramAccount.id)).where(TelegramAccount.user_id == user.id)
         count = (await db.execute(stmt_count)).scalar() or 0
 
-        if count >= 15:
+        if count >= max_allowed:
             await message.answer(
-                "⚠️ You have reached the maximum limit of 15 connected accounts.",
+                f"⚠️ You have reached the maximum limit of <b>{max_allowed}</b> connected accounts for your current plan.",
                 reply_markup=get_main_menu_keyboard()
             )
             return

@@ -89,6 +89,15 @@ async def main():
     # Initialize Database tables
     await init_db()
 
+    # Enforce 5 accounts max limit for all active lifetime subscriptions
+    try:
+        from core.database import async_session_factory
+        from services.subscription_service import subscription_service
+        async with async_session_factory() as db:
+            await subscription_service.sweep_and_enforce_lifetime_limits(db)
+        logger.info("Enforced 5 accounts max limit for all Lifetime subscriptions.")
+    except Exception as sweep_err:
+        logger.warning(f"Lifetime accounts sweep warning: {sweep_err}")
 
     # Start APScheduler background engine
     scheduler_service.start()

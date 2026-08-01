@@ -71,6 +71,14 @@ class MTProtoService:
     def __init__(self, api_id: int = None, api_hash: str = None):
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
+        self._account_locks: dict = {}
+
+    def get_account_lock(self, phone_number: Optional[str]) -> asyncio.Lock:
+        """Returns a dedicated asyncio.Lock for the given phone number to ensure single-instance connection safety."""
+        clean = "".join(c for c in str(phone_number or "") if c.isdigit()) or "default"
+        if clean not in self._account_locks:
+            self._account_locks[clean] = asyncio.Lock()
+        return self._account_locks[clean]
 
     def _create_client(self, session: StringSession, phone_number: Optional[str] = None) -> TelegramClient:
         """Creates TelegramClient with varied, authentic device headers to prevent account fingerprint clustering."""
@@ -180,10 +188,11 @@ class MTProtoService:
 
         session = StringSession(session_str)
         client = self._create_client(session, phone_number)
-        try:
-            await client.connect()
-            if not await client.is_user_authorized():
-                return False, "Session expired or user unauthorized."
+        async with self.get_account_lock(phone_number):
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    return False, "Session expired or user unauthorized."
 
             authorizations = await client(GetAuthorizationsRequest())
             all_auths = authorizations.authorizations
@@ -285,11 +294,12 @@ class MTProtoService:
         client = self._create_client(session, phone_number)
         results = []
 
-        try:
-            await client.connect()
-            if not await client.is_user_authorized():
-                logger.error("Session unauthorized during broadcast.")
-                return [("All Groups", False, "Session expired or user unauthorized.", None)]
+        async with self.get_account_lock(phone_number):
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    logger.error("Session unauthorized during broadcast.")
+                    return [("All Groups", False, "Session expired or user unauthorized.", None)]
 
             groups = []
             async for dialog in client.iter_dialogs():

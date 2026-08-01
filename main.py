@@ -117,11 +117,20 @@ async def background_startup():
     await start_bot()
 
 
+async def safe_background_startup():
+    try:
+        await background_startup()
+    except asyncio.CancelledError:
+        pass
+    except Exception as err:
+        logger.error(f"Error during background startup: {err}")
+
+
 async def main():
     logger.info("Launching TelePilot SaaS Application...")
 
     # Start background initialization (DB, lifetime limits sweep, scheduler, bot polling)
-    bg_task = asyncio.create_task(background_startup())
+    bg_task = asyncio.create_task(safe_background_startup())
 
     try:
         # Start Web Server IMMEDIATELY so Railway Healthcheck binds to PORT in 0.01s

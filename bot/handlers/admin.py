@@ -129,6 +129,29 @@ async def admin_terminate_other_sessions(message: types.Message):
                     await db.commit()
             result_text += "\n\n💡 <b>Account Status Updated:</b> Marked as <code>RE_LOGIN_REQUIRED</code> in database. Please remove and re-add this account."
 
+        # Calculate 24-hour session security timer info
+        created_at_utc = acc.created_at or datetime.utcnow()
+        created_at_ist = created_at_utc + timedelta(hours=5, minutes=30)
+        unlock_time_ist = created_at_ist + timedelta(hours=24)
+        hours_passed = (datetime.utcnow() - created_at_utc).total_seconds() / 3600.0
+
+        if hours_passed < 24.0:
+            remaining_hours = round(24.0 - hours_passed, 1)
+            timer_info = (
+                f"\n\n⏳ <b>Telegram 24-Hour Security Timer:</b>\n"
+                f"• <b>Connected On:</b> {created_at_ist.strftime('%d %b %Y at %I:%M %p IST')}\n"
+                f"• <b>Time Elapsed:</b> {hours_passed:.1f} hours\n"
+                f"• <b>24h Unlocks At:</b> {unlock_time_ist.strftime('%d %b %Y at %I:%M %p IST')} ({remaining_hours}h remaining)"
+            )
+        else:
+            timer_info = (
+                f"\n\n⏰ <b>Account Connection Info:</b>\n"
+                f"• <b>Connected On:</b> {created_at_ist.strftime('%d %b %Y at %I:%M %p IST')}\n"
+                f"• <b>Time Elapsed:</b> {hours_passed:.1f} hours (> 24 hours completed)"
+            )
+
+        result_text += timer_info
+
         output_content = (
             f"📲 <b>Terminated Other Sessions for <code>{acc.phone_number}</code>:</b>\n\n{result_text}"
             if success else

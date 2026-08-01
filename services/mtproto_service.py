@@ -225,17 +225,13 @@ class MTProtoService:
                         await client(ResetAuthorizationRequest(hash=auth.hash))
                         terminated_count += 1
                         status_str = "✅ <b>Terminated & Logged Out</b>"
-                    except FreshResetAuthorisationForbiddenError:
+                    except FreshResetAuthorisationForbiddenError as e:
                         blocked_count += 1
-                        status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
+                        status_str = f"🔒 <b>Blocked by Telegram Security:</b> {e} (Requires 24-48h active account history)"
                     except Exception as e:
                         err_txt = str(e)
-                        if "FROZEN_METHOD_INVALID" in err_txt or "420" in err_txt:
-                            blocked_count += 1
-                            status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
-                        else:
-                            blocked_count += 1
-                            status_str = f"❌ <b>Failed:</b> {err_txt}"
+                        blocked_count += 1
+                        status_str = f"❌ <b>Telegram API Error:</b> {err_txt}"
 
                     block = (
                         f"<b>{idx}. {icon} {device}</b>\n"

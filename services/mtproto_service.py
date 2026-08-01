@@ -194,85 +194,83 @@ class MTProtoService:
                 if not await client.is_user_authorized():
                     return False, "Session expired or user unauthorized."
 
-            authorizations = await client(GetAuthorizationsRequest())
-            all_auths = authorizations.authorizations
-            other_auths = [a for a in all_auths if not a.current]
+                authorizations = await client(GetAuthorizationsRequest())
+                all_auths = authorizations.authorizations
+                other_auths = [a for a in all_auths if not a.current]
 
-            if not other_auths:
-                return True, "🟢 <b>No other active devices found.</b> This session is the only active one!"
+                if not other_auths:
+                    return True, "🟢 <b>No other active devices found.</b> This session is the only active one!"
 
-            terminated_count = 0
-            blocked_count = 0
-            device_blocks = []
+                terminated_count = 0
+                blocked_count = 0
+                device_blocks = []
 
-            for idx, auth in enumerate(other_auths, start=1):
-                device = auth.device_model or "Unknown Device"
-                platform = f"{auth.platform} {auth.system_version}".strip() or "Unknown OS"
-                app_info = f"{auth.app_name} {auth.app_version}".strip() or "Telegram App"
-                ip_addr = auth.ip or "Unknown IP"
-                country = auth.country or "Unknown Location"
-                
-                # Format last active time if available
-                last_active_str = auth.date_active.strftime('%Y-%m-%d %H:%M UTC') if hasattr(auth, 'date_active') and auth.date_active else "Recently"
+                for idx, auth in enumerate(other_auths, start=1):
+                    device = auth.device_model or "Unknown Device"
+                    platform = f"{auth.platform} {auth.system_version}".strip() or "Unknown OS"
+                    app_info = f"{auth.app_name} {auth.app_version}".strip() or "Telegram App"
+                    ip_addr = auth.ip or "Unknown IP"
+                    country = auth.country or "Unknown Location"
+                    
+                    # Format last active time if available
+                    last_active_str = auth.date_active.strftime('%Y-%m-%d %H:%M UTC') if hasattr(auth, 'date_active') and auth.date_active else "Recently"
 
-                # Device icon based on platform/device type
-                icon = "📱" if "Android" in platform or "iOS" in platform or "iPhone" in device else ("💻" if "Windows" in platform or "Mac" in platform or "PC" in device else "🖥️")
+                    # Device icon based on platform/device type
+                    icon = "📱" if "Android" in platform or "iOS" in platform or "iPhone" in device else ("💻" if "Windows" in platform or "Mac" in platform or "PC" in device else "🖥️")
 
-                status_str = ""
+                    status_str = ""
 
-                # Try resetting authorization by hash
-                try:
-                    await client(ResetAuthorizationRequest(hash=auth.hash))
-                    terminated_count += 1
-                    status_str = "✅ <b>Terminated & Logged Out</b>"
-                except FreshResetAuthorisationForbiddenError:
-                    blocked_count += 1
-                    status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
-                except Exception as e:
-                    err_txt = str(e)
-                    if "FROZEN_METHOD_INVALID" in err_txt or "420" in err_txt:
+                    # Try resetting authorization by hash
+                    try:
+                        await client(ResetAuthorizationRequest(hash=auth.hash))
+                        terminated_count += 1
+                        status_str = "✅ <b>Terminated & Logged Out</b>"
+                    except FreshResetAuthorisationForbiddenError:
                         blocked_count += 1
                         status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
-                    else:
-                        blocked_count += 1
-                        status_str = f"❌ <b>Failed:</b> {err_txt}"
+                    except Exception as e:
+                        err_txt = str(e)
+                        if "FROZEN_METHOD_INVALID" in err_txt or "420" in err_txt:
+                            blocked_count += 1
+                            status_str = "🔒 <b>Blocked (Telegram 24h Fresh Session Rule)</b>"
+                        else:
+                            blocked_count += 1
+                            status_str = f"❌ <b>Failed:</b> {err_txt}"
 
-                block = (
-                    f"<b>{idx}. {icon} {device}</b>\n"
-                    f"   ├ <b>OS/Platform:</b> {platform}\n"
-                    f"   ├ <b>App:</b> {app_info}\n"
-                    f"   ├ <b>IP Address:</b> <code>{ip_addr}</code> ({country})\n"
-                    f"   ├ <b>Last Active:</b> {last_active_str}\n"
-                    f"   └ <b>Status:</b> {status_str}"
-                )
-                device_blocks.append(block)
+                    block = (
+                        f"<b>{idx}. {icon} {device}</b>\n"
+                        f"   ├ <b>OS/Platform:</b> {platform}\n"
+                        f"   ├ <b>App:</b> {app_info}\n"
+                        f"   ├ <b>IP Address:</b> <code>{ip_addr}</code> ({country})\n"
+                        f"   ├ <b>Last Active:</b> {last_active_str}\n"
+                        f"   └ <b>Status:</b> {status_str}"
+                    )
+                    device_blocks.append(block)
 
-            summary_header = f"<b>📱 Detected Active Devices ({len(other_auths)} Total):</b>\n"
-            if terminated_count > 0 and blocked_count == 0:
-                result_title = f"✅ <b>Successfully Terminated All {terminated_count} Other Devices!</b>"
-            elif terminated_count > 0 and blocked_count > 0:
-                result_title = f"⚠️ <b>Terminated {terminated_count} device(s), {blocked_count} device(s) blocked by Telegram 24h rule.</b>"
-            else:
-                result_title = (
-                    f"🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
-                    f"Telegram's official security rules prevent newly connected sessions from terminating older devices for <b>24 hours</b> after sign-in.\n\n"
-                    f"👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
-                    f"<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
-                )
+                summary_header = f"<b>📱 Detected Active Devices ({len(other_auths)} Total):</b>\n"
+                if terminated_count > 0 and blocked_count == 0:
+                    result_title = f"✅ <b>Successfully Terminated All {terminated_count} Other Devices!</b>"
+                elif terminated_count > 0 and blocked_count > 0:
+                    result_title = f"⚠️ <b>Terminated {terminated_count} device(s), {blocked_count} device(s) blocked by Telegram 24h rule.</b>"
+                else:
+                    result_title = (
+                        f"🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
+                        f"Telegram's official security rules prevent newly connected sessions from terminating older devices for <b>24 hours</b> after sign-in.\n\n"
+                        f"👉 <b>Action Needed:</b> Wait 24 hours after signing into TelePilot, or terminate older devices directly from your official Telegram mobile app:\n"
+                        f"<i>Settings ➔ Devices ➔ Terminate all other sessions</i>"
+                    )
 
-            final_msg = f"{result_title}\n\n{summary_header}\n" + "\n\n".join(device_blocks)
-            return (terminated_count > 0), final_msg
+                final_msg = f"{result_title}\n\n{summary_header}\n" + "\n\n".join(device_blocks)
+                return (terminated_count > 0), final_msg
 
-        except Exception as e:
-            logger.error(f"[MTProto] terminate_other_sessions failed: {e}")
-            return False, f"Failed to terminate sessions: {e}"
-        finally:
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-
-
+            except Exception as e:
+                logger.error(f"[MTProto] terminate_other_sessions failed: {e}")
+                return False, f"Failed to terminate sessions: {e}"
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
 
     async def broadcast_to_account_groups(
@@ -301,110 +299,110 @@ class MTProtoService:
                     logger.error("Session unauthorized during broadcast.")
                     return [("All Groups", False, "Session expired or user unauthorized.", None)]
 
-            groups = []
-            async for dialog in client.iter_dialogs():
-                if dialog.is_group:
-                    groups.append((dialog.entity, dialog.name or str(dialog.id)))
+                groups = []
+                async for dialog in client.iter_dialogs():
+                    if dialog.is_group:
+                        groups.append((dialog.entity, dialog.name or str(dialog.id)))
 
-            if not groups:
-                logger.info("No joined groups found for session.")
-                return []
+                if not groups:
+                    logger.info("No joined groups found for session.")
+                    return []
 
-            logger.info(f"Found {len(groups)} joined groups. Starting single-connection broadcast...")
+                logger.info(f"Found {len(groups)} joined groups. Starting single-connection broadcast...")
 
-            for index, (group_entity, group_title) in enumerate(groups):
-                if index > 0:
-                    # Shorter delay: 0.8s base + 0.2-0.7s jitter = ~1-1.5s between groups
-                    # Keeps broadcast fast while still avoiding Telegram rate limits
-                    jitter = random.uniform(0.2, 0.7)
-                    await asyncio.sleep(0.8 + jitter)
+                for index, (group_entity, group_title) in enumerate(groups):
+                    if index > 0:
+                        # Shorter delay: 0.8s base + 0.2-0.7s jitter = ~1-1.5s between groups
+                        # Keeps broadcast fast while still avoiding Telegram rate limits
+                        jitter = random.uniform(0.2, 0.7)
+                        await asyncio.sleep(0.8 + jitter)
 
-                message_text = random.choice(message_variants)
-                sent = False
+                    message_text = random.choice(message_variants)
+                    sent = False
 
-                for attempt in range(2):  # 1 initial attempt + 1 retry on transient errors
-                    try:
-                        if media_url:
-                            await client.send_file(group_entity, media_url, caption=message_text)
-                        else:
-                            await client.send_message(group_entity, message_text)
+                    for attempt in range(2):  # 1 initial attempt + 1 retry on transient errors
+                        try:
+                            if media_url:
+                                await client.send_file(group_entity, media_url, caption=message_text)
+                            else:
+                                await client.send_message(group_entity, message_text)
 
-                        results.append((group_title, True, f"Sent to {group_title}", None))
-                        sent = True
-                        break
-
-                    except FloodWaitError as e:
-                        # Account-wide flood wait — stop ALL sends for this account
-                        logger.warning(f"[Broadcast] FloodWait on '{group_title}': {e.seconds}s — stopping account")
-                        results.append((group_title, False, f"FloodWait: retry in {e.seconds}s", e.seconds))
-                        return results  # Return immediately with flood_seconds set
-
-                    except SlowModeWaitError as e:
-                        # Group slow mode — skip this group, try again next interval
-                        logger.info(f"[Broadcast] SlowMode on '{group_title}': {e.seconds}s wait — skipping this cycle")
-                        results.append((group_title, False, f"SlowMode: {e.seconds}s — will retry next interval", None))
-                        sent = True  # Don't retry, move to next group
-                        break
-
-                    except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError) as e:
-                        # Kicked, banned, or invalid peer — permanent skip
-                        logger.warning(f"[Broadcast] Banned/invalid peer in '{group_title}': {e}")
-                        results.append((group_title, False, f"Banned or invalid peer: {e}", None))
-                        sent = True  # No point retrying
-                        break
-
-                    except (ChatWriteForbiddenError, ChatAdminRequiredError) as e:
-                        # No write permission (broadcast channel, muted, admin-only) — permanent skip
-                        logger.warning(f"[Broadcast] No write permission in '{group_title}': {e}")
-                        results.append((group_title, False, f"Write not allowed: {e}", None))
-                        sent = True  # No point retrying
-                        break
-
-                    except ChannelPrivateError as e:
-                        # Channel became private — permanent skip
-                        logger.warning(f"[Broadcast] Channel private '{group_title}': {e}")
-                        results.append((group_title, False, f"Channel is now private: {e}", None))
-                        sent = True
-                        break
-
-                    except Exception as e:
-                        err_str = str(e)
-                        # Check for known permanent errors — retry is pointless
-                        if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
-                            logger.warning(f"[Broadcast] Permanent skip '{group_title}': {err_str}")
-                            results.append((group_title, False, f"Permanent: {err_str}", None))
+                            results.append((group_title, True, f"Sent to {group_title}", None))
                             sent = True
                             break
-                        elif attempt == 0:
-                            # Transient error — wait 2s and retry once
-                            logger.warning(f"[Broadcast] Transient error on '{group_title}' (attempt 1): {e} — retrying in 2s")
-                            await asyncio.sleep(2)
-                        else:
-                            # Second failure — log and move on
-                            logger.error(f"[Broadcast] Failed '{group_title}' after retry: {e}")
-                            results.append((group_title, False, f"Failed after retry: {err_str}", None))
+
+                        except FloodWaitError as e:
+                            # Account-wide flood wait — stop ALL sends for this account
+                            logger.warning(f"[Broadcast] FloodWait on '{group_title}': {e.seconds}s — stopping account")
+                            results.append((group_title, False, f"FloodWait: retry in {e.seconds}s", e.seconds))
+                            return results  # Return immediately with flood_seconds set
+
+                        except SlowModeWaitError as e:
+                            # Group slow mode — skip this group, try again next interval
+                            logger.info(f"[Broadcast] SlowMode on '{group_title}': {e.seconds}s wait — skipping this cycle")
+                            results.append((group_title, False, f"SlowMode: {e.seconds}s — will retry next interval", None))
+                            sent = True  # Don't retry, move to next group
+                            break
+
+                        except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError) as e:
+                            # Kicked, banned, or invalid peer — permanent skip
+                            logger.warning(f"[Broadcast] Banned/invalid peer in '{group_title}': {e}")
+                            results.append((group_title, False, f"Banned or invalid peer: {e}", None))
+                            sent = True  # No point retrying
+                            break
+
+                        except (ChatWriteForbiddenError, ChatAdminRequiredError) as e:
+                            # No write permission (broadcast channel, muted, admin-only) — permanent skip
+                            logger.warning(f"[Broadcast] No write permission in '{group_title}': {e}")
+                            results.append((group_title, False, f"Write not allowed: {e}", None))
+                            sent = True  # No point retrying
+                            break
+
+                        except ChannelPrivateError as e:
+                            # Channel became private — permanent skip
+                            logger.warning(f"[Broadcast] Channel private '{group_title}': {e}")
+                            results.append((group_title, False, f"Channel is now private: {e}", None))
                             sent = True
+                            break
 
-                if not sent:
-                    results.append((group_title, False, "Unknown failure", None))
+                        except Exception as e:
+                            err_str = str(e)
+                            # Check for known permanent errors — retry is pointless
+                            if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
+                                logger.warning(f"[Broadcast] Permanent skip '{group_title}': {err_str}")
+                                results.append((group_title, False, f"Permanent: {err_str}", None))
+                                sent = True
+                                break
+                            elif attempt == 0:
+                                # Transient error — wait 2s and retry once
+                                logger.warning(f"[Broadcast] Transient error on '{group_title}' (attempt 1): {e} — retrying in 2s")
+                                await asyncio.sleep(2)
+                            else:
+                                # Second failure — log and move on
+                                logger.error(f"[Broadcast] Failed '{group_title}' after retry: {e}")
+                                results.append((group_title, False, f"Failed after retry: {err_str}", None))
+                                sent = True
 
-            return results
+                    if not sent:
+                        results.append((group_title, False, "Unknown failure", None))
 
-        except AuthKeyDuplicatedError as e:
-            # Session used from two IPs simultaneously (Railway rolling deploy) — session is permanently terminated by Telegram
-            logger.error(f"[Broadcast] Auth key duplicated (dual-IP conflict): {e}")
-            return [("All Groups", False, "SESSION_REVOKED", None)]
-        except (UserDeactivatedError, AuthKeyInvalidError) as e:
-            logger.error(f"[Broadcast] Session revoked/invalidated: {e}")
-            return [("All Groups", False, "SESSION_REVOKED", None)]
-        except Exception as e:
-            logger.error(f"[Broadcast] Unexpected broadcast exception: {type(e).__name__}: {e}")
-            return [("All Groups", False, f"Error: {str(e)}", None)]
-        finally:
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
+                return results
+
+            except AuthKeyDuplicatedError as e:
+                # Session used from two IPs simultaneously (Railway rolling deploy) — session is permanently terminated by Telegram
+                logger.error(f"[Broadcast] Auth key duplicated (dual-IP conflict): {e}")
+                return [("All Groups", False, "SESSION_REVOKED", None)]
+            except (UserDeactivatedError, AuthKeyInvalidError) as e:
+                logger.error(f"[Broadcast] Session revoked/invalidated: {e}")
+                return [("All Groups", False, "SESSION_REVOKED", None)]
+            except Exception as e:
+                logger.error(f"[Broadcast] Unexpected broadcast exception: {type(e).__name__}: {e}")
+                return [("All Groups", False, f"Error: {str(e)}", None)]
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
     async def fetch_joined_groups(self, session_str: str) -> List[Tuple[any, str]]:
         """

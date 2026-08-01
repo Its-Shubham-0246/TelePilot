@@ -121,6 +121,14 @@ async def admin_terminate_other_sessions(message: types.Message):
         status_msg = await message.answer(f"🔄 Connecting to Telegram MTProto to terminate older device sessions for <code>{acc.phone_number}</code>...")
         success, result_text = await mtproto_service.terminate_other_sessions(session_str, phone_number=acc.phone_number)
 
+        if "unauthorized" in result_text.lower() or "expired" in result_text.lower():
+            async with async_session_factory() as db:
+                acc_obj = await db.get(TelegramAccount, acc.id)
+                if acc_obj:
+                    acc_obj.status = "RE_LOGIN_REQUIRED"
+                    await db.commit()
+            result_text += "\n\n💡 <b>Account Status Updated:</b> Marked as <code>RE_LOGIN_REQUIRED</code> in database. Please remove and re-add this account."
+
         output_content = (
             f"📲 <b>Terminated Other Sessions for <code>{acc.phone_number}</code>:</b>\n\n{result_text}"
             if success else

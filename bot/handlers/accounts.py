@@ -287,6 +287,9 @@ async def list_user_accounts(message: types.Message):
         if not user:
             await message.answer("Please type /start first.")
             return
+        from services.subscription_service import subscription_service
+        sub = await subscription_service.get_active_subscription(db, user.id)
+        max_allowed = sub.max_accounts if sub else 15
         accounts = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
 
     if not accounts:
@@ -296,7 +299,7 @@ async def list_user_accounts(message: types.Message):
         )
         return
 
-    await message.answer(f"<b>📱 Connected Accounts ({len(accounts)}/15):</b>")
+    await message.answer(f"<b>📱 Connected Accounts ({len(accounts)}/{max_allowed}):</b>")
     for acc in accounts:
         status_icon = "🟢" if acc.is_active and acc.status == "ACTIVE" else "🔴"
         await message.answer(

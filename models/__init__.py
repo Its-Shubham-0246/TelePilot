@@ -8,6 +8,7 @@ from models.job_log import JobLog
 from models.payment import Payment
 from models.discovered_group import DiscoveredGroup
 from models.system_lock import SystemLock, INSTANCE_ID
+from models.referral import ReferralTransaction, WithdrawalRequest
 
 __all__ = [
     "Base",
@@ -21,4 +22,7 @@ __all__ = [
     "DiscoveredGroup",
     "SystemLock",
     "INSTANCE_ID",
+    "ReferralTransaction",
+    "WithdrawalRequest",
 ]
+

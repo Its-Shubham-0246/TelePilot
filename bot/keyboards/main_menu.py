@@ -23,6 +23,7 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text="📊 Status"),
                 KeyboardButton(text="💳 Subscription"),
+                KeyboardButton(text="🤝 Referral Program"),
             ],
             [
                 KeyboardButton(text="⚙️ Settings"),
@@ -31,6 +32,7 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text="📢 Updates Channel"),
             ],
+
         ],
         resize_keyboard=True,
         persistent=True,

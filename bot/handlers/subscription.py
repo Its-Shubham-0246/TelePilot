@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from aiogram import Router, F, types
 from sqlalchemy import select
@@ -5,13 +6,16 @@ from sqlalchemy import select
 from core.database import async_session_factory
 from models.user import User
 from models.payment import Payment
+from models.referral import ReferralTransaction
 from services.subscription_service import (
     subscription_service, PRICING_PLANS,
     get_active_pricing, is_sale_active, get_sale_days_left
 )
 from bot.keyboards.inline import get_subscription_plans_keyboard
 
+logger = logging.getLogger(__name__)
 router = Router()
+
 
 
 @router.message(F.text == "💳 Subscription")
@@ -233,17 +237,72 @@ async def verify_payment_callback(callback: types.CallbackQuery):
             # Grant subscription
             sub = await subscription_service.add_or_renew_subscription(db, user.id, pay.plan_duration_days, pay.id)
 
+            # Process referral commission (30% default)
+            await process_referral_commission(db, user, pay)
+
             await callback.message.answer(
                 f"🎉 <b>Payment Verified Successfully!</b>\n\n"
                 f"Your <b>{sub.plan_name}</b> subscription is now active until {sub.expires_at.strftime('%d %b %Y, %I:%M %p UTC')}!\n\n"
                 f"You now have full access to all TelePilot features 🚀"
             )
             await callback.answer("✅ Payment verified!")
+
         else:
             await callback.answer(
                 f"❌ Payment Not Detected! (Razorpay Status: {status_text.upper()})\n\n"
                 f"Please complete your payment via the link provided above before clicking verify.",
                 show_alert=True
             )
+
+
+async def process_referral_commission(db, buyer_user: User, payment: Payment):
+    """Calculates and awards 30% affiliate commission to the referrer when a user buys a subscription."""
+    if not buyer_user or not buyer_user.referrer_id:
+        return
+
+    referrer = await db.get(User, buyer_user.referrer_id)
+    if not referrer:
+        return
+
+    rate = referrer.ref_commission_rate if hasattr(referrer, "ref_commission_rate") and referrer.ref_commission_rate else 0.30
+    commission_earned = round(payment.amount * rate, 2)
+
+    # Prevent duplicate commission for the same payment
+    stmt_check = select(ReferralTransaction).where(ReferralTransaction.payment_id == payment.id)
+    existing_tx = (await db.execute(stmt_check)).scalars().first()
+    if existing_tx:
+        return
+
+    tx = ReferralTransaction(
+        referrer_id=referrer.id,
+        referred_user_id=buyer_user.id,
+        payment_id=payment.id,
+        amount=payment.amount,
+        commission=commission_earned,
+        rate=rate,
+        status="EARNED"
+    )
+    db.add(tx)
+    referrer.referral_balance = round((referrer.referral_balance or 0.0) + commission_earned, 2)
+    await db.commit()
+
+    # Send instant notification to the referrer on Telegram
+    try:
+        from bot.bot_instance import bot
+        buyer_name = f"@{buyer_user.username}" if buyer_user.username else buyer_user.full_name or f"User #{buyer_user.telegram_id}"
+        perc = int(rate * 100)
+        await bot.send_message(
+            referrer.telegram_id,
+            f"💰 <b>Affiliate Commission Earned!</b>\n\n"
+            f"Your referral <b>{buyer_name}</b> purchased a subscription (₹{payment.amount:.2f} INR)!\n\n"
+            f"• <b>Commission Rate:</b> {perc}%\n"
+            f"• <b>Earned:</b> <b>+₹{commission_earned:.2f} INR</b>\n"
+            f"• <b>Current Available Balance:</b> <b>₹{referrer.referral_balance:.2f} INR</b>\n\n"
+            f"Tap <b>🤝 Referral Program</b> in main menu to check earnings & request instant withdrawal! 🚀",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to notify referrer {referrer.telegram_id}: {e}")
+
 
 

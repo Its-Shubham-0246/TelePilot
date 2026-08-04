@@ -59,10 +59,13 @@ async def admin_panel(message: types.Message):
         f"<b>Admin Commands:</b>\n"
         f"• <code>/subscribers</code> — List all active paid/granted users\n"
         f"• <code>/accounts</code> — List all connected Telegram phone numbers\n"
+        f"• <code>/withdrawals</code> — List pending affiliate withdrawal requests\n"
+        f"• <code>/setcommission &lt;user&gt; &lt;rate%&gt;</code> — Set custom commission rate (e.g. 30)\n"
         f"• <code>/getotp &lt;phone_number&gt;</code> — Fetch recent OTP code for account\n"
         f"• <code>/terminatesessions &lt;phone_number&gt;</code> — Terminate active sessions on older devices\n"
         f"• <code>/grantlifetime &lt;telegram_id&gt;</code> — Give permanent access (max 5 accs)\n"
         f"• <code>/revokelifetime &lt;telegram_id&gt;</code> — Revoke lifetime access / cancel plan\n"
+        f"• <code>/purgedb</code> — Safe DB optimization & clear old logs (>7d)\n"
         f"• <code>/testgroupalert</code> — Test sending alert to your private group\n"
         f"• <code>/cleargroupalerts</code> — Reset group alert memory (re-alert missing groups)\n"
         f"• <code>/users</code> — List all registered users with IDs\n"
@@ -70,6 +73,7 @@ async def admin_panel(message: types.Message):
         f"• <code>/ban &lt;telegram_id&gt;</code> — Ban user\n"
         f"• <code>/unban &lt;telegram_id&gt;</code> — Unban user\n"
         f"• <code>/mysub</code> — Check your own subscription status\n"
+
     )
 
     await message.answer(admin_text)
@@ -849,4 +853,203 @@ async def admin_ban_user(message: types.Message):
             await message.answer(f"✅ User <code>{target_id}</code> banned.")
         else:
             await message.answer("User not found.")
+
+
+@router.message(Command("withdrawals"))
+async def admin_list_withdrawals(message: types.Message):
+    """Admin: list all pending affiliate payout requests."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    from models.referral import WithdrawalRequest
+    from models.user import User
+
+    async with async_session_factory() as db:
+        stmt = (
+            select(WithdrawalRequest, User)
+            .join(User, WithdrawalRequest.user_id == User.id)
+            .where(WithdrawalRequest.status == "PENDING")
+            .order_by(WithdrawalRequest.id.asc())
+        )
+        withdrawals = (await db.execute(stmt)).all()
+
+    if not withdrawals:
+        await message.answer("🟢 <b>No pending affiliate withdrawal requests.</b> All payouts are up to date!")
+        return
+
+    lines = [f"<b>💸 Pending Affiliate Withdrawals ({len(withdrawals)}):</b>\n"]
+    for w, u in withdrawals:
+        username = f"@{u.username}" if u.username else u.full_name or str(u.telegram_id)
+        lines.append(
+            f"• <b>Request ID:</b> <code>#WITH-{w.id}</code>\n"
+            f"  ├ <b>User:</b> {username} (<code>{u.telegram_id}</code>)\n"
+            f"  ├ <b>Amount:</b> <b>₹{w.amount:,.2f} INR</b>\n"
+            f"  ├ <b>Payout Info:</b> <code>{w.payout_info}</code>\n"
+            f"  └ <b>Approve:</b> <code>/approvepayout {w.id}</code> | <b>Reject:</b> <code>/rejectpayout {w.id}</code>\n"
+        )
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("approvepayout"))
+async def admin_approve_payout(message: types.Message):
+    """Admin: approve and mark affiliate payout as paid."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.answer("Usage: <code>/approvepayout &lt;withdrawal_id&gt;</code>")
+        return
+
+    w_id = int(args[1])
+    from models.referral import WithdrawalRequest
+    from models.user import User
+
+    async with async_session_factory() as db:
+        w = await db.get(WithdrawalRequest, w_id)
+        if not w:
+            await message.answer(f"❌ Withdrawal request #{w_id} not found.")
+            return
+
+        if w.status != "PENDING":
+            await message.answer(f"⚠️ Withdrawal request #{w_id} is already {w.status}.")
+            return
+
+        user = await db.get(User, w.user_id)
+        w.status = "APPROVED"
+        w.processed_at = datetime.utcnow()
+
+        if user:
+            user.total_withdrawn = round((user.total_withdrawn or 0.0) + w.amount, 2)
+
+        await db.commit()
+
+        # Notify Affiliate User
+        if user:
+            try:
+                from bot.bot_instance import bot
+                await bot.send_message(
+                    user.telegram_id,
+                    f"🎉 <b>Affiliate Payout Approved & Sent!</b>\n\n"
+                    f"Your withdrawal request <code>#WITH-{w.id}</code> for <b>₹{w.amount:,.2f} INR</b> has been approved and paid via UPI/Bank transfer!\n\n"
+                    f"Thank you for promoting TelePilot! 🚀",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    await message.answer(
+        f"✅ <b>Payout Approved!</b>\n\n"
+        f"Withdrawal request <code>#WITH-{w.id}</code> for <b>₹{w.amount:,.2f} INR</b> has been marked as <b>APPROVED</b> and user notified."
+    )
+
+
+@router.message(Command("rejectpayout"))
+async def admin_reject_payout(message: types.Message):
+    """Admin: reject affiliate payout and refund balance to user."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.answer("Usage: <code>/rejectpayout &lt;withdrawal_id&gt;</code>")
+        return
+
+    w_id = int(args[1])
+    from models.referral import WithdrawalRequest
+    from models.user import User
+
+    async with async_session_factory() as db:
+        w = await db.get(WithdrawalRequest, w_id)
+        if not w:
+            await message.answer(f"❌ Withdrawal request #{w_id} not found.")
+            return
+
+        if w.status != "PENDING":
+            await message.answer(f"⚠️ Withdrawal request #{w_id} is already {w.status}.")
+            return
+
+        user = await db.get(User, w.user_id)
+        w.status = "REJECTED"
+        w.processed_at = datetime.utcnow()
+
+        # Refund balance back to user
+        if user:
+            user.referral_balance = round((user.referral_balance or 0.0) + w.amount, 2)
+
+        await db.commit()
+
+        # Notify Affiliate User
+        if user:
+            try:
+                from bot.bot_instance import bot
+                await bot.send_message(
+                    user.telegram_id,
+                    f"🔴 <b>Withdrawal Request Rejected</b>\n\n"
+                    f"Your withdrawal request <code>#WITH-{w.id}</code> for <b>₹{w.amount:,.2f} INR</b> was rejected.\n\n"
+                    f"The amount of ₹{w.amount:,.2f} INR has been refunded to your available referral balance. Please re-check your UPI/bank details and try again.",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    await message.answer(
+        f"❌ <b>Payout Rejected & Balance Refunded!</b>\n\n"
+        f"Withdrawal request <code>#WITH-{w.id}</code> (₹{w.amount:,.2f} INR) has been rejected and refunded back to user balance."
+    )
+
+
+@router.message(Command("setcommission"))
+async def admin_set_commission(message: types.Message):
+    """Admin: set custom affiliate commission rate for a user (e.g. /setcommission @username 30)."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer(
+            "Usage: <code>/setcommission &lt;telegram_id_or_username&gt; &lt;rate_percent&gt;</code>\n\n"
+            "Example: <code>/setcommission @username 30</code> (sets 30% commission)"
+        )
+        return
+
+    target_input = args[1].strip().lstrip("@")
+    try:
+        rate_percent = float(args[2].strip().rstrip("%"))
+        rate_val = rate_percent / 100.0
+    except ValueError:
+        await message.answer("❌ Invalid percentage rate. Example: 30")
+        return
+
+    async with async_session_factory() as db:
+        user = None
+        if target_input.isdigit():
+            user = (await db.execute(select(User).where(User.telegram_id == int(target_input)))).scalars().first()
+
+        if not user:
+            user = (await db.execute(
+                select(User).where(
+                    (User.username.ilike(target_input)) | (User.full_name.ilike(f"%{target_input}%"))
+                )
+            )).scalars().first()
+
+        if not user:
+            await message.answer(f"❌ User '{args[1]}' not found in database.")
+            return
+
+        user.ref_commission_rate = rate_val
+        await db.commit()
+
+    username = f"@{user.username}" if user.username else user.full_name or str(user.telegram_id)
+    await message.answer(
+        f"✅ <b>Affiliate Commission Rate Updated!</b>\n\n"
+        f"<b>User:</b> {username} (<code>{user.telegram_id}</code>)\n"
+        f"<b>New Commission Rate:</b> <b>{int(rate_percent)}%</b>"
+    )
+
 

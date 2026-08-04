@@ -177,9 +177,14 @@ class MTProtoService:
         """No-op kept for compatibility."""
         pass
 
-    async def terminate_other_sessions(self, session_str: str, phone_number: Optional[str] = None) -> Tuple[bool, str]:
+    async def terminate_other_sessions(
+        self,
+        session_str: str,
+        phone_number: Optional[str] = None,
+        password: Optional[str] = None
+    ) -> Tuple[bool, str]:
         """
-        Connects via MTProto, lists all active device authorizations with full details,
+        Connects via MTProto, verifies 2FA password if provided, lists active devices,
         and terminates/logs out all other devices except the current session.
         Returns (success, result_message).
         """
@@ -193,6 +198,14 @@ class MTProtoService:
                 await client.connect()
                 if not await client.is_user_authorized():
                     return False, "Session expired or user unauthorized."
+
+                if password:
+                    try:
+                        logger.info(f"[MTProto] Authenticating 2FA password for session termination on {phone_number}...")
+                        await client.check_password(password)
+                        logger.info(f"[MTProto] 2FA password authenticated successfully.")
+                    except Exception as pass_err:
+                        logger.warning(f"[MTProto] 2FA password authentication warning: {pass_err}")
 
                 authorizations = await client(GetAuthorizationsRequest())
                 all_auths = authorizations.authorizations
@@ -227,11 +240,14 @@ class MTProtoService:
                         status_str = "✅ <b>Terminated & Logged Out</b>"
                     except FreshResetAuthorisationForbiddenError as e:
                         blocked_count += 1
-                        status_str = f"🔒 <b>Blocked by Telegram Security:</b> {e} (Requires 24-48h active account history)"
+                        status_str = f"🔒 <b>Blocked by Telegram Security:</b> {e} (Requires 24-48h active session history)"
                     except Exception as e:
                         err_txt = str(e)
                         blocked_count += 1
-                        status_str = f"❌ <b>Telegram API Error:</b> {err_txt}"
+                        if any(kw in err_txt.upper() for kw in ("PASSWORD", "2FA", "AUTHENTICATION")):
+                            status_str = f"🔐 <b>2FA Password Required:</b> Telegram demands 2FA verification. Re-run: <code>/terminatesessions {phone_number or ''} &lt;2fa_password&gt;</code>"
+                        else:
+                            status_str = f"❌ <b>Telegram API Error:</b> {err_txt}"
 
                     block = (
                         f"<b>{idx}. {icon} {device}</b>\n"
@@ -247,7 +263,7 @@ class MTProtoService:
                 if terminated_count > 0 and blocked_count == 0:
                     result_title = f"✅ <b>Successfully Terminated All {terminated_count} Other Devices!</b>"
                 elif terminated_count > 0 and blocked_count > 0:
-                    result_title = f"⚠️ <b>Terminated {terminated_count} device(s), {blocked_count} device(s) blocked by Telegram 24h rule.</b>"
+                    result_title = f"⚠️ <b>Terminated {terminated_count} device(s), {blocked_count} device(s) blocked by Telegram security.</b>"
                 else:
                     result_title = (
                         f"🔒 <b>Telegram 24-Hour Security Protection Active!</b>\n\n"
@@ -258,6 +274,7 @@ class MTProtoService:
 
                 final_msg = f"{result_title}\n\n{summary_header}\n" + "\n\n".join(device_blocks)
                 return (terminated_count > 0), final_msg
+
 
             except Exception as e:
                 logger.error(f"[MTProto] terminate_other_sessions failed: {e}")

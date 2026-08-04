@@ -85,12 +85,15 @@ async def admin_terminate_other_sessions(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
-            "⚠️ <b>Usage:</b> <code>/terminatesessions &lt;phone_number&gt;</code>\n\n"
-            "Example: <code>/terminatesessions +919876543210</code>"
+            "⚠️ <b>Usage:</b> <code>/terminatesessions &lt;phone_number&gt; [2fa_password]</code>\n\n"
+            "Example without 2FA: <code>/terminatesessions +919876543210</code>\n"
+            "Example with 2FA: <code>/terminatesessions +919876543210 my2fapassword</code>"
         )
         return
 
     phone_input = args[1].strip()
+    password_input = args[2].strip() if len(args) >= 3 else None
+
     clean_digits = "".join(c for c in phone_input if c.isdigit())
     if not clean_digits:
         await message.answer("❌ Invalid phone number.")
@@ -118,8 +121,14 @@ async def admin_terminate_other_sessions(message: types.Message):
             await message.answer(f"❌ Could not decrypt session string for <code>{acc.phone_number}</code>.")
             return
 
-        status_msg = await message.answer(f"🔄 Connecting to Telegram MTProto to terminate older device sessions for <code>{acc.phone_number}</code>...")
-        success, result_text = await mtproto_service.terminate_other_sessions(session_str, phone_number=acc.phone_number)
+        pass_notice = " with 2FA Password verification" if password_input else ""
+        status_msg = await message.answer(f"🔄 Connecting to Telegram MTProto to terminate older device sessions for <code>{acc.phone_number}</code>{pass_notice}...")
+        success, result_text = await mtproto_service.terminate_other_sessions(
+            session_str,
+            phone_number=acc.phone_number,
+            password=password_input
+        )
+
 
         if "unauthorized" in result_text.lower() or "expired" in result_text.lower():
             async with async_session_factory() as db:

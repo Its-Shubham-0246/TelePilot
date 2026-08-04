@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from aiogram import Router, F, types
 from sqlalchemy import select, func
@@ -7,6 +8,7 @@ from models.account import TelegramAccount
 from models.schedule import Schedule
 from models.job_log import JobLog
 from services.subscription_service import subscription_service
+from services.mtproto_service import mtproto_service
 
 router = Router()
 
@@ -25,6 +27,7 @@ async def show_dashboard(message: types.Message):
 
         # 1. Subscription Info
         sub = await subscription_service.get_active_subscription(db, user.id)
+        max_allowed = sub.max_accounts if sub else 15
         if sub:
             sub_status = f"🟢 Active ({sub.plan_name})"
             days_left = (sub.expires_at - datetime.utcnow()).days
@@ -33,9 +36,15 @@ async def show_dashboard(message: types.Message):
             sub_status = "🔴 Inactive / Expired"
             days_str = "0 Days"
 
-        # 2. Connected Accounts
-        stmt_acc = select(func.count(TelegramAccount.id)).where(TelegramAccount.user_id == user.id)
-        acc_count = (await db.execute(stmt_acc)).scalar() or 0
+        # 2. Connected Accounts & Total Groups Added
+        stmt_acc = select(TelegramAccount).where(TelegramAccount.user_id == user.id)
+        accounts = (await db.execute(stmt_acc)).scalars().all()
+        acc_count = len(accounts)
+
+        group_counts = await asyncio.gather(*[
+            mtproto_service.get_joined_group_count(acc.get_session_string()) for acc in accounts
+        ])
+        total_groups = sum(group_counts)
 
         # 3. Schedule Running Status
         stmt_sched = select(Schedule).where(Schedule.user_id == user.id)
@@ -66,10 +75,12 @@ async def show_dashboard(message: types.Message):
         f"<b>👤 User:</b> {user.full_name or user.username or message.from_user.id}\n"
         f"<b>💳 Subscription:</b> {sub_status}\n"
         f"<b>⏳ Days Remaining:</b> {days_str}\n"
-        f"<b>📱 Connected Accounts:</b> {acc_count} / 15\n"
+        f"<b>📱 Connected Accounts:</b> {acc_count} / {max_allowed}\n"
+        f"<b>📢 Total Groups Added:</b> {total_groups}\n"
         f"<b>⚡ Schedule Status:</b> {status_str}\n"
         f"<b>📤 Messages Sent Today:</b> {sent_today}\n"
         f"<b>⚠️ Errors/Warnings Today:</b> {errors_today}\n"
     )
 
     await message.answer(dashboard_text)
+

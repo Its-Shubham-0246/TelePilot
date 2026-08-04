@@ -1,10 +1,13 @@
+import asyncio
 from aiogram import Router, F, types
 from sqlalchemy import select, func
 
 from core.database import async_session_factory
 from models.user import User
+from models.account import TelegramAccount
 from models.schedule import Schedule
 from models.job_log import JobLog
+from services.mtproto_service import mtproto_service
 
 router = Router()
 
@@ -38,10 +41,12 @@ async def show_status_report(message: types.Message):
         )
         total_flood = (await db.execute(stmt_flood)).scalar() or 0
 
-        # Connected Groups & Schedule Info
-        stmt_sched = select(Schedule).where(Schedule.user_id == user.id)
-        sched = (await db.execute(stmt_sched)).scalars().first()
-        connected_groups = len(sched.target_chats) if (sched and sched.target_chats) else 0
+        # Connected Accounts & Groups Info
+        accounts = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
+        group_counts = await asyncio.gather(*[
+            mtproto_service.get_joined_group_count(acc.get_session_string()) for acc in accounts
+        ])
+        total_groups = sum(group_counts)
 
         # Last Activity
         stmt_last = select(JobLog).join(Schedule).where(
@@ -55,8 +60,10 @@ async def show_status_report(message: types.Message):
         f"<b>✅ Total Messages Sent:</b> {total_sent}\n"
         f"<b>❌ Failed Messages:</b> {total_failed}\n"
         f"<b>⚠️ Rate-Limit Warnings:</b> {total_flood}\n"
-        f"<b>📢 Connected Groups:</b> {connected_groups}\n"
+        f"<b>📱 Connected Accounts:</b> {len(accounts)}\n"
+        f"<b>📢 Groups Added Across Accounts:</b> {total_groups}\n"
         f"<b>🕒 Last Activity:</b> {last_activity}\n"
     )
 
     await message.answer(report_text)
+

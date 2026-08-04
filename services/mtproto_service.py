@@ -425,6 +425,20 @@ class MTProtoService:
             except Exception:
                 pass
 
+    async def get_joined_group_count(self, session_str: str, timeout: float = 10.0) -> int:
+        """
+        Fetches joined group count for an account session with timeout safety.
+        """
+        if not session_str:
+            return 0
+        try:
+            groups = await asyncio.wait_for(self.fetch_joined_groups(session_str), timeout=timeout)
+            return len(groups)
+        except Exception as e:
+            logger.warning(f"Error fetching joined group count: {e}")
+            return 0
+
+
     async def send_message_to_target(
         self,
         session_str: str,

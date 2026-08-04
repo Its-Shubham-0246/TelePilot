@@ -14,6 +14,8 @@ from bot.keyboards.inline import (
 )
 from bot.keyboards.main_menu import get_main_menu_keyboard, get_cancel_keyboard
 
+from services.mtproto_service import mtproto_service
+
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -75,11 +77,13 @@ async def open_account_msg_config(callback: types.CallbackQuery):
             await callback.answer("Account not found.", show_alert=True)
             return
 
+        g_count = await mtproto_service.get_joined_group_count(acc.get_session_string())
         msg_status = f"<code>{acc.custom_message}</code>" if acc.custom_message else "<i>Not Set</i>"
         enabled_status = "🟢 ENABLED" if acc.auto_group_enabled else "🔴 DISABLED"
         
         info = (
             f"<b>⚙️ Settings for Account:</b> <code>{acc.phone_number}</code>\n\n"
+            f"<b>📢 Groups Added:</b> <b>{g_count} group(s)</b>\n"
             f"<b>Auto-Messaging:</b> {enabled_status}\n"
             f"<b>Timer Interval:</b> Every <b>{acc.interval_minutes} minute(s)</b>\n"
             f"<b>Current Message:</b>\n{msg_status}\n\n"
@@ -88,6 +92,7 @@ async def open_account_msg_config(callback: types.CallbackQuery):
         kb = get_account_msg_config_keyboard(acc.id, acc.auto_group_enabled)
         await callback.message.edit_text(info, reply_markup=kb)
         await callback.answer()
+
 
 
 @router.callback_query(F.data.startswith("cfg_set_msg_"))

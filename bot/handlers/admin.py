@@ -363,6 +363,7 @@ async def admin_list_accounts(message: types.Message):
         return
 
     from models.account import TelegramAccount
+    from services.mtproto_service import mtproto_service
 
     async with async_session_factory() as db:
         stmt = (
@@ -377,17 +378,23 @@ async def admin_list_accounts(message: types.Message):
         await message.answer("📲 No Telegram accounts connected yet.")
         return
 
-    lines = [f"<b>📱 Connected Telegram Accounts ({len(accounts_data)})</b>\n"]
-    for acc, u in accounts_data:
+    group_counts = await asyncio.gather(*[
+        mtproto_service.get_joined_group_count(acc.get_session_string()) for acc, _ in accounts_data
+    ])
+    total_groups = sum(group_counts)
+
+    lines = [f"<b>📱 Connected Telegram Accounts ({len(accounts_data)}) | Total Groups: {total_groups}</b>\n"]
+    for (acc, u), g_count in zip(accounts_data, group_counts):
         username = f"@{u.username}" if u.username else u.full_name or "Unknown"
         status_icon = "🟢" if acc.status == "ACTIVE" else "🔴"
         lines.append(
             f"• {status_icon} <code>{acc.phone_number}</code>\n"
             f"  └ <b>User:</b> {username} (<code>{u.telegram_id}</code>)\n"
-            f"  └ <b>Status:</b> {acc.status} | <b>Interval:</b> {acc.interval_minutes}m"
+            f"  └ <b>Groups Added:</b> {g_count} | <b>Status:</b> {acc.status} | <b>Interval:</b> {acc.interval_minutes}m"
         )
 
     await message.answer("\n".join(lines))
+
 
 
 
@@ -509,12 +516,19 @@ async def admin_find_user(message: types.Message):
 
         from services.subscription_service import subscription_service
         from models.account import TelegramAccount
+        from services.mtproto_service import mtproto_service
 
         active_sub = await subscription_service.get_active_subscription(db, user.id)
         accs = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
 
     sub_info = f"{active_sub.plan_name} (Expires: {active_sub.expires_at.strftime('%Y-%m-%d')})" if active_sub else "🔴 No Active Subscription"
-    acc_list = "\n".join([f"  • <code>{a.phone_number}</code> ({a.status})" for a in accs]) if accs else "  • None"
+    if accs:
+        group_counts = await asyncio.gather(*[
+            mtproto_service.get_joined_group_count(a.get_session_string()) for a in accs
+        ])
+        acc_list = "\n".join([f"  • <code>{a.phone_number}</code> ({a.status}) — {gc} group(s)" for a, gc in zip(accs, group_counts)])
+    else:
+        acc_list = "  • None"
 
     await message.answer(
         f"👤 <b>User Information:</b>\n\n"
@@ -525,6 +539,7 @@ async def admin_find_user(message: types.Message):
         f"<b>Connected Accounts ({len(accs)}):</b>\n{acc_list}\n\n"
         f"💡 <i>To grant lifetime access, run:</i>\n<code>/grantlifetime {user.telegram_id}</code>"
     )
+
 
 
 @router.message(Command("grantlifetime"))

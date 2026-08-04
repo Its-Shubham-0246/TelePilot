@@ -299,15 +299,25 @@ async def list_user_accounts(message: types.Message):
         )
         return
 
-    await message.answer(f"<b>📱 Connected Accounts ({len(accounts)}/{max_allowed}):</b>")
-    for acc in accounts:
+    import asyncio
+    group_counts = await asyncio.gather(*[
+        mtproto_service.get_joined_group_count(acc.get_session_string()) for acc in accounts
+    ])
+    total_groups = sum(group_counts)
+
+    await message.answer(
+        f"<b>📱 Connected Accounts ({len(accounts)}/{max_allowed}) | 📢 Total Groups: {total_groups}</b>"
+    )
+    for acc, g_count in zip(accounts, group_counts):
         status_icon = "🟢" if acc.is_active and acc.status == "ACTIVE" else "🔴"
         await message.answer(
             f"{status_icon} <b>Phone:</b> <code>{acc.phone_number}</code>\n"
+            f"<b>📢 Groups Added:</b> <b>{g_count} group(s)</b>\n"
             f"<b>Status:</b> {acc.status}\n"
             f"<b>Active:</b> {'Yes' if acc.is_active else 'No'}",
             reply_markup=get_account_manage_keyboard(acc.id, acc.is_active)
         )
+
 
 
 # ── Callback: Back to main ────────────────────────────────────────────────────

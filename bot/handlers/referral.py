@@ -27,6 +27,20 @@ async def show_referral_program(message: types.Message):
             await message.answer("Please type /start first.")
             return
 
+        from services.subscription_service import subscription_service
+        sub = await subscription_service.get_active_subscription(db, user.id)
+        if not sub:
+            kb_buy = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="💳 Get Active Subscription to Unlock", callback_data="back_to_main")]
+            ])
+            await message.answer(
+                "🔒 <b>Exclusive Perk for Active Subscribers!</b>\n\n"
+                "The <b>30% Affiliate & Referral Program</b> is an exclusive reward for active TelePilot subscribers.\n\n"
+                "👉 Please purchase any subscription plan to unlock your unique 30% referral link, earn instant cash commissions, and receive direct UPI payouts! 🚀",
+                reply_markup=kb_buy
+            )
+            return
+
         # Count total referrals
         stmt_ref_count = select(func.count(User.id)).where(User.referrer_id == user.id)
         ref_count = (await db.execute(stmt_ref_count)).scalar() or 0
@@ -37,6 +51,7 @@ async def show_referral_program(message: types.Message):
             ReferralTransaction.status == "EARNED"
         )
         total_earned = (await db.execute(stmt_total_earned)).scalar() or 0.0
+
 
     bot_info = await message.bot.get_me()
     bot_username = bot_info.username

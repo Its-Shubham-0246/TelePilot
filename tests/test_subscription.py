@@ -45,10 +45,14 @@ async def test_referral_commission_30_percent():
         await db.commit()
         await db.refresh(referrer)
 
+        # Active subscription required for referrer to earn commission
+        await subscription_service.add_or_renew_subscription(db, referrer.id, 30)
+
         buyer = User(telegram_id=buyer_id, username=f"buyer_{buyer_id}", referrer_id=referrer.id)
         db.add(buyer)
         await db.commit()
         await db.refresh(buyer)
+
 
         pay = Payment(user_id=buyer.id, amount=299.0, currency="INR", plan_duration_days=30, status="VERIFIED")
         db.add(pay)

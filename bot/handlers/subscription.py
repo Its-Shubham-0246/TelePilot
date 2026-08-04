@@ -264,7 +264,25 @@ async def process_referral_commission(db, buyer_user: User, payment: Payment):
     if not referrer:
         return
 
+    # Verify referrer has an active subscription to be eligible for affiliate commissions
+    referrer_sub = await subscription_service.get_active_subscription(db, referrer.id)
+    if not referrer_sub:
+        logger.info(f"Referrer #{referrer.id} has no active subscription — skipping referral commission.")
+        try:
+            from bot.bot_instance import bot
+            await bot.send_message(
+                referrer.telegram_id,
+                f"⚠️ <b>Referral Commission Missed!</b>\n\n"
+                f"Your referral just purchased a TelePilot subscription (₹{payment.amount:.2f} INR)!\n\n"
+                f"🔒 However, referral commissions are exclusive to active subscribers. Please renew your subscription to earn <b>30% cash commission</b> on future purchases! 🚀",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+
     rate = referrer.ref_commission_rate if hasattr(referrer, "ref_commission_rate") and referrer.ref_commission_rate else 0.30
+
     commission_earned = round(payment.amount * rate, 2)
 
     # Prevent duplicate commission for the same payment

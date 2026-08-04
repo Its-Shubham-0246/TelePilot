@@ -102,7 +102,10 @@ class SchedulerService:
             return
 
         try:
-            # Step 1: Collect active schedule IDs using a short-lived session
+            # Step 1: Run database cleanup to prune old logs and purge inactive accounts
+            await self.cleanup_database()
+
+            # Step 2: Collect active schedule IDs using a short-lived session
             async with async_session_factory() as db:
                 stmt = select(Schedule).where(Schedule.is_active == True)
                 result = await db.execute(stmt)
@@ -111,12 +114,38 @@ class SchedulerService:
             if not schedule_ids:
                 return
 
-            # Step 2: Run all active schedule checks concurrently in parallel
+            # Step 3: Run all active schedule checks concurrently in parallel
             tasks = [self._process_single_schedule(sched_id) for sched_id in schedule_ids]
             await asyncio.gather(*tasks, return_exceptions=True)
 
         except Exception as e:
             logger.error(f"[Scheduler] process_active_schedules failed: {type(e).__name__}: {e}", exc_info=True)
+
+    async def cleanup_database(self):
+        """Safely purges dead account sessions and job logs older than 7 days to preserve useful data while keeping storage efficient."""
+        try:
+            from sqlalchemy import delete
+            async with async_session_factory() as db:
+                # 1. Remove only permanently dead or revoked account records
+                stmt_del_acc = delete(TelegramAccount).where(
+                    (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
+                )
+                res_acc = await db.execute(stmt_del_acc)
+                deleted_acc = res_acc.rowcount or 0
+
+                # 2. Prune old job logs older than 7 days (168 hours) to preserve user history & status reports
+                cutoff = datetime.utcnow() - timedelta(days=7)
+                stmt_del_logs = delete(JobLog).where(JobLog.sent_at < cutoff)
+                res_logs = await db.execute(stmt_del_logs)
+                deleted_logs = res_logs.rowcount or 0
+
+                await db.commit()
+                if deleted_acc > 0 or deleted_logs > 0:
+                    logger.info(f"[DBCleanup] Purged {deleted_acc} revoked account(s) and {deleted_logs} old job log(s) (>7 days).")
+        except Exception as e:
+            logger.warning(f"[DBCleanup] Safe cleanup warning: {e}")
+
+            logger.warning(f"[DBCleanup] Database cleanup error: {e}")
 
     async def _process_single_schedule(self, sched_id: int):
         """Processes a single schedule with its own session."""
@@ -153,6 +182,7 @@ class SchedulerService:
         stmt_acc = select(TelegramAccount).where(
             TelegramAccount.user_id == schedule.user_id,
             TelegramAccount.is_active == True,
+            TelegramAccount.status == "ACTIVE",
             TelegramAccount.auto_group_enabled == True,
         )
         accounts_res = await db.execute(stmt_acc)
@@ -176,7 +206,10 @@ class SchedulerService:
         async with self.account_semaphore:
             async with async_session_factory() as db:
                 account = await db.get(TelegramAccount, account_id)
-                if not account or not account.is_active or not account.auto_group_enabled:
+                if not account or not account.is_active or account.status != "ACTIVE" or not account.auto_group_enabled:
+                    if account and (not account.is_active or account.status in ("BANNED", "RE_LOGIN_REQUIRED")):
+                        await db.delete(account)
+                        await db.commit()
                     return
 
                 now = datetime.utcnow()
@@ -193,9 +226,11 @@ class SchedulerService:
                         logger.info(f"[Scheduler] {account.phone_number} FloodWait {wait_left}m left — skipping")
                         return
 
-                # Skip banned/broken accounts
+                # Auto-remove banned/broken accounts from DB
                 if account.status in ("BANNED", "RE_LOGIN_REQUIRED"):
-                    logger.info(f"[Scheduler] {account.phone_number} status={account.status} — skipping")
+                    logger.info(f"[Scheduler] Removing invalid account {account.phone_number} from database.")
+                    await db.delete(account)
+                    await db.commit()
                     return
 
                 # Check interval timer (strict check: full interval_minutes * 60 seconds required)
@@ -221,18 +256,13 @@ class SchedulerService:
                     session_str = ""
 
                 if not session_str:
-                    logger.error(f"[Scheduler] {account.phone_number} — session invalid (needs re-login)")
-                    account.status = "RE_LOGIN_REQUIRED"
+                    logger.error(f"[Scheduler] {account.phone_number} — session invalid, auto-removing from DB.")
+                    await db.delete(account)
                     await db.commit()
                     if user_telegram_id:
                         await _notify_user(
                             user_telegram_id,
-                            f"🔴 <b>Account Needs Re-Login!</b>\n\n"
-                            f"The session for <code>{account.phone_number}</code> has expired or is invalid.\n\n"
-                            f"Please:\n"
-                            f"1️⃣ Tap <b>👤 My Accounts</b>\n"
-                            f"2️⃣ Find this account → <b>🗑 Remove Account</b>\n"
-                            f"3️⃣ Tap <b>➕ Add Account</b> to reconnect"
+                            f"🔴 <b>Account Removed:</b> Session for <code>{account.phone_number}</code> expired or was invalid. It has been automatically removed from the database. Tap <b>➕ Add Account</b> to reconnect."
                         )
                     return
 
@@ -269,21 +299,17 @@ class SchedulerService:
                 session_revoked = False
                 for group_title, success, log_msg, flood_seconds in broadcast_results:
                     if log_msg == "SESSION_REVOKED":
-                        account.status = "RE_LOGIN_REQUIRED"
+                        logger.info(f"[Scheduler] Session revoked for {account.phone_number} — removing from DB.")
+                        await db.delete(account)
                         await db.commit()
                         session_revoked = True
                         if user_telegram_id:
                             await _notify_user(
                                 user_telegram_id,
-                                f"🔴 <b>Account Session Terminated!</b>\n\n"
-                                f"<code>{account.phone_number}</code> was connected from two locations simultaneously "
-                                f"(happens during Railway deploys) and Telegram permanently terminated the session.\n\n"
-                                f"Please:\n"
-                                f"1️⃣ Tap <b>👤 My Accounts</b>\n"
-                                f"2️⃣ Find this account → <b>🗑 Remove Account</b>\n"
-                                f"3️⃣ Tap <b>➕ Add Account</b> to reconnect"
+                                f"🔴 <b>Account Removed:</b> Session for <code>{account.phone_number}</code> was terminated by Telegram. It has been automatically removed from database. Tap <b>➕ Add Account</b> to reconnect."
                             )
                         break
+
 
                     job_log = JobLog(
                         schedule_id=schedule_id,

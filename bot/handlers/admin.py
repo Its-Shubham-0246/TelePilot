@@ -357,25 +357,33 @@ async def admin_test_group_alert(message: types.Message):
 
 @router.message(Command("accounts"))
 async def admin_list_accounts(message: types.Message):
-    """Admin: list all connected Telegram accounts across all users."""
+    """Admin: list all ACTIVE connected Telegram accounts across all users."""
     if not is_admin_user(message.from_user.id):
         await message.answer("❌ Unauthorized.")
         return
 
     from models.account import TelegramAccount
     from services.mtproto_service import mtproto_service
+    from sqlalchemy import delete
 
     async with async_session_factory() as db:
+        # First purge dead / revoked / non-active accounts from database
+        await db.execute(delete(TelegramAccount).where(
+            (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
+        ))
+        await db.commit()
+
         stmt = (
             select(TelegramAccount, User)
             .join(User, TelegramAccount.user_id == User.id)
+            .where(TelegramAccount.is_active == True, TelegramAccount.status == "ACTIVE")
             .order_by(TelegramAccount.id.desc())
         )
         result = await db.execute(stmt)
         accounts_data = result.all()
 
     if not accounts_data:
-        await message.answer("📲 No Telegram accounts connected yet.")
+        await message.answer("📲 No active Telegram accounts connected.")
         return
 
     group_counts = await asyncio.gather(*[
@@ -383,19 +391,49 @@ async def admin_list_accounts(message: types.Message):
     ])
     total_groups = sum(group_counts)
 
-    lines = [f"<b>📱 Connected Telegram Accounts ({len(accounts_data)}) | Total Groups: {total_groups}</b>\n"]
+    lines = [f"<b>📱 Connected Active Telegram Accounts ({len(accounts_data)}) | Total Groups: {total_groups}</b>\n"]
     for (acc, u), g_count in zip(accounts_data, group_counts):
         username = f"@{u.username}" if u.username else u.full_name or "Unknown"
-        status_icon = "🟢" if acc.status == "ACTIVE" else "🔴"
         lines.append(
-            f"• {status_icon} <code>{acc.phone_number}</code>\n"
+            f"• 🟢 <code>{acc.phone_number}</code>\n"
             f"  └ <b>User:</b> {username} (<code>{u.telegram_id}</code>)\n"
-            f"  └ <b>Groups Added:</b> {g_count} | <b>Status:</b> {acc.status} | <b>Interval:</b> {acc.interval_minutes}m"
+            f"  └ <b>Groups Added:</b> {g_count} | <b>Interval:</b> {acc.interval_minutes}m"
         )
 
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("purgedb", "cleanupdb"))
+async def admin_purge_db(message: types.Message):
+    """Admin: Safe database optimization. Purges dead accounts and job logs older than 7 days."""
+    if not is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    from models.account import TelegramAccount
+    from models.job_log import JobLog
+    from sqlalchemy import delete
+
+    async with async_session_factory() as db:
+        # 1. Purge dead / revoked / inactive accounts
+        res_acc = await db.execute(delete(TelegramAccount).where(
+            (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
+        ))
+        acc_deleted = res_acc.rowcount or 0
+
+        # 2. Prune old job logs older than 7 days (preserves user statistics & recent logs)
+        cutoff = datetime.utcnow() - timedelta(days=7)
+        res_logs = await db.execute(delete(JobLog).where(JobLog.sent_at < cutoff))
+        logs_deleted = res_logs.rowcount or 0
+
+        await db.commit()
+
+    await message.answer(
+        f"🧹 <b>Database Optimization Complete!</b>\n\n"
+        f"• <b>Revoked/Dead Accounts Removed:</b> {acc_deleted}\n"
+        f"• <b>Old Job Logs Cleared (>7 days):</b> {logs_deleted}\n\n"
+        f"✅ <i>All users, subscriptions, schedules, and active accounts remain 100% safe & intact!</i>"
+    )
 
 
 @router.message(Command("cleargroupalerts"))
@@ -417,6 +455,7 @@ async def admin_clear_group_alerts(message: types.Message):
         "All group discovery records have been reset.\n"
         "On the next broadcast cycle, any group missing from your reference account will trigger an immediate alert in your private group!"
     )
+
 
 
 

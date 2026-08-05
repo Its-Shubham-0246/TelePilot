@@ -409,12 +409,13 @@ class MTProtoService:
                 return results
 
             except AuthKeyDuplicatedError as e:
-                # Session used from two IPs simultaneously (Railway rolling deploy) — session is permanently terminated by Telegram
-                logger.error(f"[Broadcast] Auth key duplicated (dual-IP conflict): {e}")
-                return [("All Groups", False, "SESSION_REVOKED", None)]
+                # Session used from two IPs simultaneously (Railway rolling deploy / concurrent workers) — temporary conflict, not revoked
+                logger.warning(f"[Broadcast] Auth key duplicated (dual-IP conflict) for {phone_number}: {e} — skipping cycle")
+                return [("All Groups", False, "DUAL_IP_CONFLICT", None)]
             except (UserDeactivatedError, AuthKeyInvalidError) as e:
-                logger.error(f"[Broadcast] Session revoked/invalidated: {e}")
+                logger.error(f"[Broadcast] Session revoked/invalidated for {phone_number}: {e}")
                 return [("All Groups", False, "SESSION_REVOKED", None)]
+
             except Exception as e:
                 logger.error(f"[Broadcast] Unexpected broadcast exception: {type(e).__name__}: {e}")
                 return [("All Groups", False, f"Error: {str(e)}", None)]

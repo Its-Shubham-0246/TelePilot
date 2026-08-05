@@ -380,18 +380,13 @@ async def admin_list_accounts(message: types.Message):
     from sqlalchemy import delete
 
     async with async_session_factory() as db:
-        # First purge dead / revoked / non-active accounts from database
-        await db.execute(delete(TelegramAccount).where(
-            (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
-        ))
-        await db.commit()
-
         stmt = (
             select(TelegramAccount, User)
             .join(User, TelegramAccount.user_id == User.id)
             .where(TelegramAccount.is_active == True, TelegramAccount.status == "ACTIVE")
             .order_by(TelegramAccount.id.desc())
         )
+
         result = await db.execute(stmt)
         accounts_data = result.all()
 

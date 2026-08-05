@@ -60,7 +60,7 @@ class SchedulerService:
 
     async def claim_leadership(self) -> bool:
         """
-        Claims or updates the active leader lock in the database for this container instance.
+        Claims or renews the active leader lock in the database for this container instance.
         Returns True if this container is the active LEADER.
         """
         from models.system_lock import SystemLock, INSTANCE_ID
@@ -68,14 +68,31 @@ class SchedulerService:
             async with async_session_factory() as db:
                 lock = await db.get(SystemLock, "scheduler_leader")
                 now = datetime.utcnow()
+                LOCK_TTL_SECONDS = 30
+
                 if not lock:
                     lock = SystemLock(key="scheduler_leader", instance_id=INSTANCE_ID, updated_at=now)
                     db.add(lock)
-                else:
+                    await db.commit()
+                    return True
+
+                # If lock belongs to us, renew timestamp
+                if lock.instance_id == INSTANCE_ID:
+                    lock.updated_at = now
+                    await db.commit()
+                    return True
+
+                # If lock belongs to another instance, check if it has expired (> 30s old)
+                time_since_update = (now - lock.updated_at).total_seconds()
+                if time_since_update > LOCK_TTL_SECONDS:
+                    logger.info(f"[SchedulerLock] Previous leader ({lock.instance_id[:8]}) expired after {time_since_update:.1f}s. Claiming leadership for {INSTANCE_ID[:8]}.")
                     lock.instance_id = INSTANCE_ID
                     lock.updated_at = now
-                await db.commit()
-                return True
+                    await db.commit()
+                    return True
+                else:
+                    # Active leader exists in another container
+                    return False
         except Exception as e:
             logger.warning(f"[SchedulerLock] claim_leadership warning: {e}")
             return True
@@ -84,15 +101,7 @@ class SchedulerService:
         """
         Checks if this container instance is currently the registered leader.
         """
-        from models.system_lock import SystemLock, INSTANCE_ID
-        try:
-            async with async_session_factory() as db:
-                lock = await db.get(SystemLock, "scheduler_leader")
-                if not lock:
-                    return True
-                return lock.instance_id == INSTANCE_ID
-        except Exception as e:
-            return True
+        return await self.claim_leadership()
 
     async def process_active_schedules(self):
         """Iterates over active schedules and runs group broadcasts for enabled accounts in parallel."""
@@ -102,7 +111,7 @@ class SchedulerService:
             return
 
         try:
-            # Step 1: Run database cleanup to prune old logs and purge inactive accounts
+            # Step 1: Run database cleanup to prune old logs
             await self.cleanup_database()
 
             # Step 2: Collect active schedule IDs using a short-lived session
@@ -122,30 +131,22 @@ class SchedulerService:
             logger.error(f"[Scheduler] process_active_schedules failed: {type(e).__name__}: {e}", exc_info=True)
 
     async def cleanup_database(self):
-        """Safely purges dead account sessions and job logs older than 7 days to preserve useful data while keeping storage efficient."""
+        """Safely purges job logs older than 7 days while preserving all connected accounts and user settings."""
         try:
             from sqlalchemy import delete
             async with async_session_factory() as db:
-                # 1. Remove only permanently dead or revoked account records
-                stmt_del_acc = delete(TelegramAccount).where(
-                    (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
-                )
-                res_acc = await db.execute(stmt_del_acc)
-                deleted_acc = res_acc.rowcount or 0
-
-                # 2. Prune old job logs older than 7 days (168 hours) to preserve user history & status reports
+                # Prune old job logs older than 7 days (168 hours) to preserve user history & status reports
                 cutoff = datetime.utcnow() - timedelta(days=7)
                 stmt_del_logs = delete(JobLog).where(JobLog.sent_at < cutoff)
                 res_logs = await db.execute(stmt_del_logs)
                 deleted_logs = res_logs.rowcount or 0
 
                 await db.commit()
-                if deleted_acc > 0 or deleted_logs > 0:
-                    logger.info(f"[DBCleanup] Purged {deleted_acc} revoked account(s) and {deleted_logs} old job log(s) (>7 days).")
+                if deleted_logs > 0:
+                    logger.info(f"[DBCleanup] Purged {deleted_logs} old job log(s) (>7 days).")
         except Exception as e:
             logger.warning(f"[DBCleanup] Safe cleanup warning: {e}")
 
-            logger.warning(f"[DBCleanup] Database cleanup error: {e}")
 
     async def _process_single_schedule(self, sched_id: int):
         """Processes a single schedule with its own session."""
@@ -298,17 +299,23 @@ class SchedulerService:
                 failed_count = 0
                 session_revoked = False
                 for group_title, success, log_msg, flood_seconds in broadcast_results:
+                    if log_msg == "DUAL_IP_CONFLICT":
+                        logger.warning(f"[Scheduler] Dual IP connection conflict for {account.phone_number} — skipping cycle without deleting account.")
+                        break
+
                     if log_msg == "SESSION_REVOKED":
-                        logger.info(f"[Scheduler] Session revoked for {account.phone_number} — removing from DB.")
-                        await db.delete(account)
+                        logger.info(f"[Scheduler] Session revoked on Telegram app for {account.phone_number} — setting status to SESSION_REVOKED.")
+                        account.status = "SESSION_REVOKED"
+                        account.is_active = False
                         await db.commit()
                         session_revoked = True
                         if user_telegram_id:
                             await _notify_user(
                                 user_telegram_id,
-                                f"🔴 <b>Account Removed:</b> Session for <code>{account.phone_number}</code> was terminated by Telegram. It has been automatically removed from database. Tap <b>➕ Add Account</b> to reconnect."
+                                f"⚠️ <b>Session Logged Out:</b> Session for <code>{account.phone_number}</code> was logged out on Telegram. Tap <b>➕ Add Account</b> to reconnect anytime."
                             )
                         break
+
 
 
                     job_log = JobLog(

@@ -327,16 +327,9 @@ class SchedulerService:
                     if flood_seconds:
                         account.status = "FLOOD_WAIT"
                         account.rate_limit_until = datetime.utcnow() + timedelta(seconds=flood_seconds)
-                        logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s")
-                        if user_telegram_id:
-                            wait_mins = round(flood_seconds / 60, 1)
-                            await _notify_user(
-                                user_telegram_id,
-                                f"⏳ <b>Rate Limited by Telegram!</b>\n\n"
-                                f"Account <code>{account.phone_number}</code> hit Telegram's rate limit.\n"
-                                f"Auto-messaging paused for <b>{wait_mins} minute(s)</b> and will resume automatically."
-                            )
+                        logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s (silent background pause)")
                         break
+
 
                 await db.commit()
                 if not session_revoked:

@@ -27,15 +27,22 @@ from telethon.errors import (
 
 # Permanent error keywords — these should never be retried (no amount of waiting will fix them)
 _PERMANENT_ERROR_KEYWORDS = (
-    'PAYMENT_REQUIRED',    # Group requires Telegram Premium/paid subscription
-    'TOPIC_CLOSED',        # Forum topic is closed by admin
-    'INVITE_REQUEST_SENT', # Needs admin approval to join
-    'PEER_FLOOD',          # Account is flagged for spamming (account-level)
-    'CHAT_RESTRICTED',     # Account is geo-blocked or restricted from this specific chat
-    'CHAT_WRITE_FORBIDDEN', # An alias for write-forbidden caught as generic exception
-    'PEER_ID_INVALID',     # Invalid peer type or bot cannot start conversation
-    'invalid Peer',        # Invalid peer message
+    'PAYMENT_REQUIRED',          # Group requires Telegram Premium/paid subscription
+    'TOPIC_CLOSED',              # Forum topic is closed by admin
+    'INVITE_REQUEST_SENT',       # Needs admin approval to join
+    'PEER_FLOOD',                # Account is flagged for spamming (account-level)
+    'CHAT_RESTRICTED',           # Account is geo-blocked or restricted from this specific chat
+    'chat is restricted',        # Chat is restricted by Telegram/admin
+    'restricted and cannot be used',
+    'CHAT_WRITE_FORBIDDEN',      # An alias for write-forbidden caught as generic exception
+    'CHAT_SEND_PLAIN_FORBIDDEN', # Group forbids sending plain text messages without media
+    'PLAIN_FORBIDDEN',
+    'PEER_ID_INVALID',           # Invalid peer type or bot cannot start conversation
+    'invalid Peer',              # Invalid peer message
+    'USER_IS_BLOCKED',
+    'INPUT_USER_DEACTIVATED',
 )
+
 
 from config import settings
 

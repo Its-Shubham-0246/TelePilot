@@ -183,7 +183,7 @@ class SchedulerService:
         stmt_acc = select(TelegramAccount).where(
             TelegramAccount.user_id == schedule.user_id,
             TelegramAccount.is_active == True,
-            TelegramAccount.status == "ACTIVE",
+            TelegramAccount.status.in_(["ACTIVE", "FLOOD_WAIT"]),
             TelegramAccount.auto_group_enabled == True,
         )
         accounts_res = await db.execute(stmt_acc)
@@ -207,32 +207,24 @@ class SchedulerService:
         async with self.account_semaphore:
             async with async_session_factory() as db:
                 account = await db.get(TelegramAccount, account_id)
-                if not account or not account.is_active or account.status != "ACTIVE" or not account.auto_group_enabled:
-                    if account and (not account.is_active or account.status in ("BANNED", "RE_LOGIN_REQUIRED")):
-                        await db.delete(account)
-                        await db.commit()
+                if not account or not account.is_active or not account.auto_group_enabled or account.status not in ("ACTIVE", "FLOOD_WAIT"):
                     return
 
                 now = datetime.utcnow()
 
                 # Auto-reset FLOOD_WAIT if the wait period has passed
-                if account.status == "FLOOD_WAIT" and account.rate_limit_until:
-                    if now >= account.rate_limit_until:
-                        logger.info(f"[Scheduler] FloodWait cleared for {account.phone_number}")
+                if account.status == "FLOOD_WAIT":
+                    if account.rate_limit_until and now >= account.rate_limit_until:
+                        logger.info(f"[Scheduler] FloodWait cleared for {account.phone_number}. Resuming active status.")
                         account.status = "ACTIVE"
                         account.rate_limit_until = None
                         await db.commit()
                     else:
-                        wait_left = int((account.rate_limit_until - now).total_seconds() / 60)
-                        logger.info(f"[Scheduler] {account.phone_number} FloodWait {wait_left}m left — skipping")
+                        wait_left_secs = int((account.rate_limit_until - now).total_seconds()) if account.rate_limit_until else 60
+                        wait_left_mins = round(max(wait_left_secs, 1) / 60.0, 1)
+                        logger.info(f"[Scheduler] {account.phone_number} FloodWait active ({wait_left_mins}m remaining) — waiting automatically.")
                         return
 
-                # Auto-remove banned/broken accounts from DB
-                if account.status in ("BANNED", "RE_LOGIN_REQUIRED"):
-                    logger.info(f"[Scheduler] Removing invalid account {account.phone_number} from database.")
-                    await db.delete(account)
-                    await db.commit()
-                    return
 
                 # Check interval timer (strict check: full interval_minutes * 60 seconds required)
                 if account.last_used_at:

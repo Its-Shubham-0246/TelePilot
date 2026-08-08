@@ -229,22 +229,25 @@ class SchedulerService:
                 continue
 
             variants = [v.strip() for v in acc.custom_message.split("---") if v.strip()] or [acc.custom_message]
-            seq_idx = acc.current_msg_index or 0
 
             ready_acc_data.append({
                 "id": acc.id,
                 "account": acc,
                 "phone_number": acc.phone_number,
                 "session_str": session_str,
-                "seq_index": seq_idx,
+                "seq_index": 0,
                 "variants": variants,
             })
 
         if len(ready_acc_data) > 1:
-            logger.info(f"[Scheduler] Executing STACKED in-group broadcast for {len(ready_acc_data)} accounts of user #{schedule.user_id}")
+            # Force a single unified sequence index across ALL accounts owned by the user
+            shared_seq_idx = ready_acc_data[0]["account"].current_msg_index or 0
             for item in ready_acc_data:
+                item["seq_index"] = shared_seq_idx
                 item["account"].last_used_at = now
             await db.commit()
+
+            logger.info(f"[Scheduler] Executing STACKED in-group broadcast for {len(ready_acc_data)} accounts of user #{schedule.user_id} (shared_seq_idx={shared_seq_idx})")
 
             results_by_account = await mtproto_service.broadcast_multi_account_stacked(
                 accounts_data=ready_acc_data
@@ -254,11 +257,10 @@ class SchedulerService:
                 acc = item["account"]
                 acc_id = acc.id
                 variants = item["variants"]
-                seq_idx = item["seq_index"]
                 acc_results = results_by_account.get(acc_id, [])
 
                 if len(variants) > 1:
-                    acc.current_msg_index = (seq_idx + 1) % len(variants)
+                    acc.current_msg_index = (shared_seq_idx + 1) % len(variants)
 
                 sent_count = 0
                 failed_count = 0

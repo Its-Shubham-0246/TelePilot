@@ -14,3 +14,15 @@ def test_session_string_encryption_and_decryption():
 def test_empty_session_string():
     assert encrypt_session_string("") == ""
     assert decrypt_session_string("") == ""
+
+
+def test_process_spintax():
+    from services.mtproto_service import process_spintax
+    pattern = "{Option1|Option2|Option3}"
+    result = process_spintax(pattern)
+    assert result in ["Option1", "Option2", "Option3"]
+
+    nested_pattern = "Hello {world|{there|friend}}!"
+    res2 = process_spintax(nested_pattern)
+    assert res2.startswith("Hello ")
+

@@ -64,6 +64,17 @@ _DEVICE_POOL = [
 ]
 
 
+def process_spintax(text: str) -> str:
+    """Processes Spintax patterns like {option1|option2|option3} to create unique message variations per group send."""
+    if not text:
+        return ""
+    import re
+    pattern = re.compile(r'\{([^{}]+)\}')
+    while pattern.search(text):
+        text = pattern.sub(lambda m: random.choice(m.group(1).split('|')), text)
+    return text
+
+
 def _get_device_fingerprint(phone_number: Optional[str] = None) -> dict:
     """Returns a deterministic device fingerprint based on phone number hash, or random if no phone."""
     if phone_number:
@@ -332,20 +343,27 @@ class MTProtoService:
 
                 for index, (group_entity, group_title) in enumerate(groups):
                     if index > 0:
-                        # Shorter delay: 0.8s base + 0.2-0.7s jitter = ~1-1.5s between groups
-                        # Keeps broadcast fast while still avoiding Telegram rate limits
-                        jitter = random.uniform(0.2, 0.7)
-                        await asyncio.sleep(0.8 + jitter)
+                        # Human-like delay: 2.5s base + 0.5-2.0s jitter = ~3.0s-4.5s between groups
+                        # Prevents Telegram anti-spam shadow-muting and keeps group post views & RPM high
+                        jitter = random.uniform(0.5, 2.0)
+                        await asyncio.sleep(2.5 + jitter)
 
-                    message_text = random.choice(message_variants)
+                    raw_variant = random.choice(message_variants)
+                    message_text = process_spintax(raw_variant)
                     sent = False
 
                     for attempt in range(2):  # 1 initial attempt + 1 retry on transient errors
                         try:
                             if media_url:
-                                await client.send_file(group_entity, media_url, caption=message_text)
+                                try:
+                                    await client.send_file(group_entity, media_url, caption=message_text, parse_mode='html')
+                                except Exception:
+                                    await client.send_file(group_entity, media_url, caption=message_text)
                             else:
-                                await client.send_message(group_entity, message_text)
+                                try:
+                                    await client.send_message(group_entity, message_text, parse_mode='html', link_preview=True)
+                                except Exception:
+                                    await client.send_message(group_entity, message_text, link_preview=True)
 
                             results.append((group_title, True, f"Sent to {group_title}", None))
                             sent = True
@@ -479,7 +497,8 @@ class MTProtoService:
         if not message_variants:
             return False, "No message content variants provided.", None
 
-        message_text = random.choice(message_variants)
+        raw_variant = random.choice(message_variants)
+        message_text = process_spintax(raw_variant)
         session = StringSession(session_str)
         client = self._create_client(session)
 
@@ -493,9 +512,15 @@ class MTProtoService:
             await asyncio.sleep(actual_delay)
 
             if media_url:
-                await client.send_file(target_chat, media_url, caption=message_text)
+                try:
+                    await client.send_file(target_chat, media_url, caption=message_text, parse_mode='html')
+                except Exception:
+                    await client.send_file(target_chat, media_url, caption=message_text)
             else:
-                await client.send_message(target_chat, message_text)
+                try:
+                    await client.send_message(target_chat, message_text, parse_mode='html', link_preview=True)
+                except Exception:
+                    await client.send_message(target_chat, message_text, link_preview=True)
 
             return True, f"Message sent successfully to {target_chat}", None
 

@@ -104,7 +104,10 @@ async def start_set_message(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "<b>📝 Set Auto-Messaging Text</b>\n\n"
         "Send your message text below.\n\n"
-        "💡 <b>Tip for Message Variants:</b> Separate multiple message versions using <code>---</code> on a new line to automatically rotate variants and avoid Telegram spam flags!\n\n"
+        "💡 <b>Tips for Higher Views & High RPM:</b>\n"
+        "• <b>HTML Links & Formatting:</b> Use HTML tags like <code>&lt;a href=\"https://yourlink.com\"&gt;🔥 Click Here&lt;/a&gt;</code> for rich clickable links & preview cards!\n"
+        "• <b>Spintax Randomization:</b> Use <code>{Click Here|Watch Now|Download Free}</code> to automatically randomize text for every group send!\n"
+        "• <b>Multiple Variants:</b> Separate full variants using <code>---</code> on a new line.\n\n"
         "Tap <b>🔙 Back to Main Menu</b> to cancel.",
         reply_markup=get_cancel_keyboard()
     )

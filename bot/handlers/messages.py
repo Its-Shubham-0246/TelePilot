@@ -62,10 +62,33 @@ async def show_accounts_message_list(event_obj, edit: bool = False, user_telegra
             await event_obj.answer(text, reply_markup=get_main_menu_keyboard())
         return
 
+    # Check common configuration state across accounts
+    first_msg = accounts[0].custom_message or ""
+    first_timer = accounts[0].interval_minutes
+    is_common_msg = all(acc.custom_message == first_msg for acc in accounts) if accounts else False
+    is_common_timer = all(acc.interval_minutes == first_timer for acc in accounts) if accounts else False
+
+    variants = [v.strip() for v in first_msg.split("---") if v.strip()] if first_msg else []
+
+    if is_common_msg and is_common_timer:
+        if len(variants) > 1:
+            rot_info = f"🔄 <b>Sequential Rotation Active ({len(variants)} Variants):</b> All accounts switch together <code>Variant 1 ➔ Variant 2 ➔ Variant {len(variants)}</code> on each cycle."
+        else:
+            rot_info = "💬 <b>Single Common Message Active</b>"
+
+        sync_card = (
+            f"⚡ <b>SYNCHRONIZED BROADCAST ACTIVE ({len(accounts)} Accounts)</b>\n"
+            f"• <b>Shared Timer:</b> Every <b>{first_timer} minute(s)</b> simultaneously\n"
+            f"• <b>Message Strategy:</b> {rot_info}\n\n"
+        )
+    else:
+        sync_card = "💡 <i>Tip: Tap <b>🌐 Common Message</b> and <b>⏱ Common Timer</b> below to synchronize all accounts to post identical messages together!</i>\n\n"
+
     text = (
-        "<b>💬 Config Messages & Timers for Accounts</b>\n\n"
-        "🌐 <b>Common Message & Timer (All Accounts):</b> Set a shared message and timer to synchronize auto-messaging across all accounts simultaneously.\n\n"
-        "📱 <b>Individual Account Config:</b> Select an account below to configure individual messages and timers."
+        f"<b>💬 Config Messages & Timers for Accounts</b>\n\n"
+        f"{sync_card}"
+        f"🌐 <b>Common Message & Timer:</b> Set a shared message & timer across all accounts.\n"
+        f"📱 <b>Individual Config:</b> Tap any account below to customize settings independently."
     )
     kb = get_messages_accounts_keyboard(accounts)
     if edit and isinstance(event_obj, types.Message):
@@ -160,7 +183,7 @@ async def process_common_timer_input(message: types.Message, state: FSMContext):
                     TelegramAccount.is_active == True
                 )
             )).scalars().all()
-            now = datetime.utcnow()
+            now = datetime.utcnow().replace(microsecond=0)
             for acc in accs:
                 acc.interval_minutes = minutes
                 acc.last_used_at = now
@@ -286,7 +309,7 @@ async def handle_timer_preset_click(callback: types.CallbackQuery, state: FSMCon
                         TelegramAccount.is_active == True
                     )
                 )).scalars().all()
-                now = datetime.utcnow()
+                now = datetime.utcnow().replace(microsecond=0)
                 for a in accs:
                     a.interval_minutes = minutes
                     a.last_used_at = now

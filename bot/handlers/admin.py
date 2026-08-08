@@ -465,26 +465,33 @@ async def admin_purge_db(message: types.Message):
 
     from models.account import TelegramAccount
     from models.job_log import JobLog
+    from services.subscription_service import subscription_service
     from sqlalchemy import delete
 
     try:
         async with async_session_factory() as db:
+            # 1. Purge dead / revoked / inactive accounts
             res_acc = await db.execute(delete(TelegramAccount).where(
                 (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
             ))
             acc_deleted = res_acc.rowcount or 0
 
+            # 2. Prune old job logs older than 7 days
             cutoff = datetime.utcnow() - timedelta(days=7)
             res_logs = await db.execute(delete(JobLog).where(JobLog.sent_at < cutoff))
             logs_deleted = res_logs.rowcount or 0
+
+            # 3. Purge non-admin users unsubscribed for > 2 days
+            purged_users = await subscription_service.purge_unsubscribed_users(db, grace_days=2)
 
             await db.commit()
 
         await message.answer(
             f"🧹 <b>Database Optimization Complete!</b>\n\n"
+            f"• <b>Unsubscribed Users Purged (>2 days):</b> {purged_users}\n"
             f"• <b>Revoked/Dead Accounts Removed:</b> {acc_deleted}\n"
             f"• <b>Old Job Logs Cleared (>7 days):</b> {logs_deleted}\n\n"
-            f"✅ <i>All users, subscriptions, schedules, and active accounts remain 100% safe & intact!</i>"
+            f"✅ <i>All active subscribers and admin accounts remain 100% safe & intact!</i>"
         )
     except Exception as e:
         logger.error(f"Error in /purgedb: {e}", exc_info=True)
@@ -556,7 +563,7 @@ async def admin_list_subscribers(message: types.Message):
 
 @router.message(Command("users"))
 async def admin_list_users(message: types.Message):
-    """Admin: list registered users with Telegram IDs, active sub, and account counts."""
+    """Admin: list registered users with Telegram IDs, active sub, account counts, and join dates."""
     if not await is_admin_user(message.from_user.id):
         await message.answer("❌ Unauthorized.")
         return
@@ -595,9 +602,11 @@ async def admin_list_users(message: types.Message):
                     select(func.count(TelegramAccount.id)).where(TelegramAccount.user_id == u.id)
                 )).scalar() or 0
 
+                created_str = u.created_at.strftime('%d %b %Y') if u.created_at else "Unknown"
+
                 items.append(
                     f"• <code>{u.telegram_id}</code> | {username_str} | {name_str}\n"
-                    f"  └ <b>Status:</b> {sub_tag} | <b>Accounts:</b> {acc_count}"
+                    f"  └ <b>Status:</b> {sub_tag} | <b>Accounts:</b> {acc_count} | <b>Joined:</b> {created_str}"
                 )
 
         header = f"<b>👥 Registered Users (Page {page} | Total: {total_count})</b>\n"
@@ -636,7 +645,7 @@ async def admin_find_user(message: types.Message):
             active_sub = await subscription_service.get_active_subscription(db, user.id)
             accs = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
 
-        sub_info = f"{html.escape(active_sub.plan_name)} (Expires: {active_sub.expires_at.strftime('%Y-%m-%d')})" if active_sub else "🔴 No Active Subscription"
+        sub_info = f"🟢 {html.escape(active_sub.plan_name)} (Expires: {active_sub.expires_at.strftime('%Y-%m-%d')})" if active_sub else "🔴 No Active Subscription"
         if accs:
             group_counts = await asyncio.gather(*[
                 mtproto_service.get_joined_group_count(a.get_session_string()) for a in accs
@@ -647,15 +656,28 @@ async def admin_find_user(message: types.Message):
 
         safe_name = html.escape(user.full_name or "—")
         safe_uname = html.escape(user.username) if user.username else "None"
+        created_str = user.created_at.strftime('%d %b %Y at %H:%M UTC') if user.created_at else "Unknown"
+        admin_tag = "👑 Admin" if user.is_admin else "👤 Regular User"
+        comm_perc = int((user.ref_commission_rate or 0.30) * 100)
+        avail_bal = round(user.referral_balance or 0.0, 2)
+        withdrawn = round(user.total_withdrawn or 0.0, 2)
 
         await message.answer(
-            f"👤 <b>User Information:</b>\n\n"
+            f"👤 <b>Full User Profile & Metrics:</b>\n\n"
+            f"<b>Database ID:</b> #{user.id}\n"
             f"<b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
             f"<b>Username:</b> @{safe_uname}\n"
             f"<b>Full Name:</b> {safe_name}\n"
-            f"<b>Subscription:</b> {sub_info}\n"
-            f"<b>Connected Accounts ({len(accs)}):</b>\n{acc_list}\n\n"
-            f"💡 <i>To grant lifetime access, run:</i>\n<code>/grantlifetime {user.telegram_id}</code>"
+            f"<b>Role:</b> {admin_tag}\n"
+            f"<b>Account Status:</b> {user.status}\n"
+            f"<b>Joined Date:</b> {created_str}\n\n"
+            f"💳 <b>Subscription:</b> {sub_info}\n"
+            f"🤝 <b>Affiliate Stats:</b> {comm_perc}% commission | ₹{avail_bal:,.2f} INR balance | ₹{withdrawn:,.2f} INR withdrawn\n\n"
+            f"<b>Connected Telegram Accounts ({len(accs)}):</b>\n{acc_list}\n\n"
+            f"💡 <i>Quick Admin Actions:</i>\n"
+            f"• Grant Lifetime: <code>/grantlifetime {user.telegram_id}</code>\n"
+            f"• Revoke Plan: <code>/revokelifetime {user.telegram_id}</code>\n"
+            f"• Set Commission: <code>/setcommission {user.telegram_id} 30</code>"
         )
     except Exception as e:
         logger.error(f"Error in /finduser: {e}", exc_info=True)

@@ -131,19 +131,20 @@ class SchedulerService:
             logger.error(f"[Scheduler] process_active_schedules failed: {type(e).__name__}: {e}", exc_info=True)
 
     async def cleanup_database(self):
-        """Safely purges job logs older than 7 days while preserving all connected accounts and user settings."""
+        """Safely purges job logs older than 7 days and unsubscribed users (>2 days without active sub)."""
         try:
             from sqlalchemy import delete
             async with async_session_factory() as db:
-                # Prune old job logs older than 7 days (168 hours) to preserve user history & status reports
                 cutoff = datetime.utcnow() - timedelta(days=7)
                 stmt_del_logs = delete(JobLog).where(JobLog.sent_at < cutoff)
                 res_logs = await db.execute(stmt_del_logs)
                 deleted_logs = res_logs.rowcount or 0
-
                 await db.commit()
-                if deleted_logs > 0:
-                    logger.info(f"[DBCleanup] Purged {deleted_logs} old job log(s) (>7 days).")
+
+                purged_users = await subscription_service.purge_unsubscribed_users(db, grace_days=2)
+
+                if deleted_logs > 0 or purged_users > 0:
+                    logger.info(f"[DBCleanup] Purged {deleted_logs} old job log(s) (>7 days) and {purged_users} unsubscribed user(s) (>2 days without active sub).")
         except Exception as e:
             logger.warning(f"[DBCleanup] Safe cleanup warning: {e}")
 

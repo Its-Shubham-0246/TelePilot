@@ -128,6 +128,47 @@ class SubscriptionService:
             await self.enforce_user_account_limit(db, sub.user_id, max_limit=5)
         await db.commit()
 
+    async def purge_unsubscribed_users(self, db: AsyncSession, grace_days: int = 2) -> int:
+        """
+        Deletes non-admin users who have not been subscribed for more than grace_days (default 2 days).
+        Cascades deletion to all their connected accounts, schedules, templates, payments, and user profile.
+        Returns the number of purged users.
+        """
+        from config import settings
+        from sqlalchemy import func
+        now = datetime.utcnow()
+        cutoff = now - timedelta(days=grace_days)
+
+        stmt = select(User).where(User.is_admin == False)
+        users = (await db.execute(stmt)).scalars().all()
+
+        purged_count = 0
+        for user in users:
+            if user.telegram_id in settings.admin_ids_list:
+                continue
+
+            active_sub = await self.get_active_subscription(db, user.id)
+            if active_sub:
+                continue
+
+            stmt_latest = select(func.max(Subscription.expires_at)).where(Subscription.user_id == user.id)
+            latest_expires = (await db.execute(stmt_latest)).scalar()
+
+            if latest_expires:
+                if latest_expires < cutoff:
+                    await db.delete(user)
+                    purged_count += 1
+            else:
+                created_at = user.created_at or now
+                if created_at < cutoff:
+                    await db.delete(user)
+                    purged_count += 1
+
+        if purged_count > 0:
+            await db.commit()
+
+        return purged_count
+
 
 subscription_service = SubscriptionService()
 

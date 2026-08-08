@@ -52,6 +52,11 @@ class SubscriptionGateMiddleware(BaseMiddleware):
                 if text.startswith("/id") or text.startswith("/getchatid"):
                     return await handler(event, data)
 
+                # Allow admin commands for recognized admins in group chats
+                from bot.handlers.admin import is_admin_user
+                if await is_admin_user(event.from_user.id):
+                    return await handler(event, data)
+
                 await event.answer("👉 Please click @TelePilotSaaSBot to use the bot in private chat!")
                 return
             return await handler(event, data)

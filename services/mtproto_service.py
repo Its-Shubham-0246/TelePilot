@@ -413,26 +413,16 @@ class MTProtoService:
                             sent = True  # Don't retry, move to next group
                             break
 
-                        except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError) as e:
-                            # Kicked, banned, or invalid peer — permanent skip
-                            logger.warning(f"[Broadcast] Banned/invalid peer in '{group_title}': {e}")
-                            results.append((group_title, False, f"Banned or invalid peer: {e}", None))
-                            sent = True  # No point retrying
-                            consecutive_skips += 1
-                            break
+                        except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError, ChatWriteForbiddenError, ChatAdminRequiredError, ChannelPrivateError) as e:
+                            # Muted, banned, or admin-only — auto-leave non-writable group (excluding paid groups)
+                            logger.warning(f"[Broadcast] Non-writable group '{group_title}' for {phone_number}: {e}")
+                            try:
+                                await client.delete_dialog(group_entity)
+                                logger.info(f"[AutoLeave] Account {phone_number} automatically left non-writable group '{group_title}'")
+                            except Exception as leave_err:
+                                logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
 
-                        except (ChatWriteForbiddenError, ChatAdminRequiredError) as e:
-                            # No write permission (broadcast channel, muted, admin-only) — permanent skip
-                            logger.warning(f"[Broadcast] No write permission in '{group_title}': {e}")
-                            results.append((group_title, False, f"Write not allowed: {e}", None))
-                            sent = True  # No point retrying
-                            consecutive_skips += 1
-                            break
-
-                        except ChannelPrivateError as e:
-                            # Channel became private — permanent skip
-                            logger.warning(f"[Broadcast] Channel private '{group_title}': {e}")
-                            results.append((group_title, False, f"Channel is now private: {e}", None))
+                            results.append((group_title, False, f"Auto-Left (Unwritable): {e}", None))
                             sent = True
                             consecutive_skips += 1
                             break
@@ -625,9 +615,15 @@ class MTProtoService:
                             break
 
                         except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError, ChatWriteForbiddenError, ChatAdminRequiredError, ChannelPrivateError) as e:
-                            logger.warning(f"[BroadcastStacked] Skip group '{group_title}' for {acc['phone_number']}: {e}")
+                            logger.warning(f"[BroadcastStacked] Skip non-writable group '{group_title}' for {acc['phone_number']}: {e}")
                             self.mark_group_unwriteable(acc["phone_number"], g_key)
-                            results_by_account[acc_id].append((group_title, False, f"Skip: {e}", None))
+                            try:
+                                await client.delete_dialog(group_entity)
+                                logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left non-writable group '{group_title}'")
+                            except Exception as leave_err:
+                                logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+
+                            results_by_account[acc_id].append((group_title, False, f"Auto-Left: {e}", None))
                             sent = True
                             consecutive_failures[acc_id] += 1
                             break

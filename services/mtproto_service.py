@@ -90,6 +90,29 @@ class MTProtoService:
         self.api_id = api_id or settings.TELEGRAM_API_ID
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
         self._account_locks: dict = {}
+        self._slowmode_cache: dict = {}      # (phone_number, group_key) -> expire_datetime_utc
+        self._unwriteable_cache: set = set() # (phone_number, group_key)
+
+    def is_group_slowmode_active(self, phone_number: str, group_key: str) -> bool:
+        cache_key = (phone_number, str(group_key))
+        expire_time = self._slowmode_cache.get(cache_key)
+        if expire_time:
+            if datetime.utcnow() < expire_time:
+                return True
+            else:
+                del self._slowmode_cache[cache_key]
+        return False
+
+    def set_group_slowmode(self, phone_number: str, group_key: str, seconds: int):
+        if seconds > 0:
+            cache_key = (phone_number, str(group_key))
+            self._slowmode_cache[cache_key] = datetime.utcnow() + timedelta(seconds=seconds)
+
+    def is_group_unwriteable(self, phone_number: str, group_key: str) -> bool:
+        return (phone_number, str(group_key)) in self._unwriteable_cache
+
+    def mark_group_unwriteable(self, phone_number: str, group_key: str):
+        self._unwriteable_cache.add((phone_number, str(group_key)))
 
     def get_account_lock(self, phone_number: Optional[str]) -> asyncio.Lock:
         """Returns a dedicated asyncio.Lock for the given phone number to ensure single-instance connection safety."""
@@ -548,6 +571,16 @@ class MTProtoService:
                         continue
 
                     group_entity, group_title = g_map[g_key]
+
+                    # Fast-path cache checks to save Telegram API calls and prevent timeouts
+                    if self.is_group_slowmode_active(acc["phone_number"], g_key):
+                        results_by_account[acc_id].append((group_title, False, "SlowMode (active cache)", None))
+                        continue
+
+                    if self.is_group_unwriteable(acc["phone_number"], g_key):
+                        results_by_account[acc_id].append((group_title, False, "Unwriteable (cached)", None))
+                        continue
+
                     client = clients[acc_id]
 
                     variants = acc["variants"]
@@ -585,13 +618,15 @@ class MTProtoService:
                             break
 
                         except SlowModeWaitError as e:
-                            logger.info(f"[BroadcastStacked] SlowMode on '{group_title}': {e.seconds}s wait — skipping group")
+                            logger.info(f"[BroadcastStacked] SlowMode on '{group_title}': {e.seconds}s wait — caching and skipping group")
+                            self.set_group_slowmode(acc["phone_number"], g_key, e.seconds)
                             results_by_account[acc_id].append((group_title, False, f"SlowMode: {e.seconds}s", None))
                             sent = True
                             break
 
                         except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError, ChatWriteForbiddenError, ChatAdminRequiredError, ChannelPrivateError) as e:
                             logger.warning(f"[BroadcastStacked] Skip group '{group_title}' for {acc['phone_number']}: {e}")
+                            self.mark_group_unwriteable(acc["phone_number"], g_key)
                             results_by_account[acc_id].append((group_title, False, f"Skip: {e}", None))
                             sent = True
                             consecutive_failures[acc_id] += 1
@@ -600,6 +635,7 @@ class MTProtoService:
                         except Exception as e:
                             err_str = str(e)
                             if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
+                                self.mark_group_unwriteable(acc["phone_number"], g_key)
                                 results_by_account[acc_id].append((group_title, False, f"Permanent: {err_str}", None))
                                 sent = True
                                 consecutive_failures[acc_id] += 1

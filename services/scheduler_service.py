@@ -265,6 +265,7 @@ class SchedulerService:
 
                 sent_count = 0
                 failed_count = 0
+                logs_batch = []
                 for group_title, success, log_msg, flood_seconds in acc_results:
                     if log_msg == "DUAL_IP_CONFLICT":
                         continue
@@ -283,7 +284,7 @@ class SchedulerService:
                         sent_at=now,
                         error_details=None if success else log_msg
                     )
-                    db.add(job_log)
+                    logs_batch.append(job_log)
                     if success:
                         sent_count += 1
                     else:
@@ -294,6 +295,8 @@ class SchedulerService:
                         acc.rate_limit_until = now + timedelta(seconds=flood_seconds)
                         break
 
+                if logs_batch:
+                    db.add_all(logs_batch)
                 await db.commit()
                 logger.info(f"[Scheduler] Stacked finish for {acc.phone_number} — sent={sent_count} failed={failed_count}")
             return

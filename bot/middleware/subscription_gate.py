@@ -94,7 +94,11 @@ class SubscriptionGateMiddleware(BaseMiddleware):
 
 
 
-            has_sub = await subscription_service.check_user_has_active_sub(db, user.id)
+            from config import settings
+            if user.is_admin or event.from_user.id in settings.admin_ids_list:
+                has_sub = True
+            else:
+                has_sub = await subscription_service.check_user_has_active_sub(db, user.id)
 
         if not has_sub:
             await event.answer(

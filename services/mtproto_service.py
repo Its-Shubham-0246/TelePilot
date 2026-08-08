@@ -476,14 +476,17 @@ class MTProtoService:
             except Exception:
                 pass
 
-    async def get_joined_group_count(self, session_str: str, phone_number: Optional[str] = None, timeout: float = 3.0) -> int:
+    async def get_joined_group_count(self, session_str: str, phone_number: Optional[str] = None, timeout: float = 1.5) -> int:
         """
-        Fetches joined group count for an account session with lock and timeout safety.
+        Fetches joined group count for an account session with non-blocking lock and timeout safety.
         """
         if not session_str:
             return 0
         try:
-            async with self.get_account_lock(phone_number):
+            lock = self.get_account_lock(phone_number)
+            if lock.locked():
+                return 0
+            async with lock:
                 groups = await asyncio.wait_for(self.fetch_joined_groups(session_str, phone_number=phone_number), timeout=timeout)
                 return len(groups)
         except Exception as e:

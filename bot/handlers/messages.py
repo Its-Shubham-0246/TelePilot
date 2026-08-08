@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -36,12 +37,13 @@ async def manage_messages_entry(message: types.Message):
 
 @router.callback_query(F.data == "msg_list_accounts")
 async def callback_list_accounts(callback: types.CallbackQuery):
-    await show_accounts_message_list(callback.message, edit=True)
+    await show_accounts_message_list(callback.message, edit=True, user_telegram_id=callback.from_user.id)
 
 
-async def show_accounts_message_list(event_obj, edit: bool = False):
+async def show_accounts_message_list(event_obj, edit: bool = False, user_telegram_id: Optional[int] = None):
+    target_id = user_telegram_id or event_obj.from_user.id
     async with async_session_factory() as db:
-        user_stmt = select(User).where(User.telegram_id == event_obj.from_user.id)
+        user_stmt = select(User).where(User.telegram_id == target_id)
         user = (await db.execute(user_stmt)).scalars().first()
         if not user:
             return

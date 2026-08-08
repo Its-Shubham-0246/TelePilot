@@ -282,41 +282,48 @@ async def save_account_session(telegram_id: int, phone: str, session_str: str):
 # ── My Accounts ───────────────────────────────────────────────────────────────
 @router.message(F.text == "👤 My Accounts")
 async def list_user_accounts(message: types.Message):
-    async with async_session_factory() as db:
-        user = (await db.execute(select(User).where(User.telegram_id == message.from_user.id))).scalars().first()
-        if not user:
-            await message.answer("Please type /start first.")
+    import html
+    try:
+        async with async_session_factory() as db:
+            user = (await db.execute(select(User).where(User.telegram_id == message.from_user.id))).scalars().first()
+            if not user:
+                await message.answer("Please type /start first.")
+                return
+            from services.subscription_service import subscription_service
+            sub = await subscription_service.get_active_subscription(db, user.id)
+            max_allowed = sub.max_accounts if sub else 15
+            accounts = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
+
+        if not accounts:
+            await message.answer(
+                "No Telegram accounts connected yet. Tap ➕ Add Account to get started.",
+                reply_markup=get_main_menu_keyboard()
+            )
             return
-        from services.subscription_service import subscription_service
-        sub = await subscription_service.get_active_subscription(db, user.id)
-        max_allowed = sub.max_accounts if sub else 15
-        accounts = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
 
-    if not accounts:
+        import asyncio
+        group_counts = await asyncio.gather(*[
+            mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number) for acc in accounts
+        ])
+        total_groups = sum(group_counts)
+
         await message.answer(
-            "No Telegram accounts connected yet. Tap ➕ Add Account to get started.",
-            reply_markup=get_main_menu_keyboard()
+            f"<b>📱 Connected Accounts ({len(accounts)}/{max_allowed}) | 📢 Total Groups: {total_groups}</b>"
         )
-        return
-
-    import asyncio
-    group_counts = await asyncio.gather(*[
-        mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number) for acc in accounts
-    ])
-    total_groups = sum(group_counts)
-
-    await message.answer(
-        f"<b>📱 Connected Accounts ({len(accounts)}/{max_allowed}) | 📢 Total Groups: {total_groups}</b>"
-    )
-    for acc, g_count in zip(accounts, group_counts):
-        status_icon = "🟢" if acc.is_active and acc.status == "ACTIVE" else "🔴"
-        await message.answer(
-            f"{status_icon} <b>Phone:</b> <code>{acc.phone_number}</code>\n"
-            f"<b>📢 Groups Added:</b> <b>{g_count} group(s)</b>\n"
-            f"<b>Status:</b> {acc.status}\n"
-            f"<b>Active:</b> {'Yes' if acc.is_active else 'No'}",
-            reply_markup=get_account_manage_keyboard(acc.id, acc.is_active)
-        )
+        for acc, g_count in zip(accounts, group_counts):
+            status_icon = "🟢" if acc.is_active and acc.status == "ACTIVE" else "🔴"
+            safe_phone = html.escape(acc.phone_number)
+            safe_status = html.escape(acc.status)
+            await message.answer(
+                f"{status_icon} <b>Phone:</b> <code>{safe_phone}</code>\n"
+                f"<b>📢 Groups Added:</b> <b>{g_count} group(s)</b>\n"
+                f"<b>Status:</b> {safe_status}\n"
+                f"<b>Active:</b> {'Yes' if acc.is_active else 'No'}",
+                reply_markup=get_account_manage_keyboard(acc.id, acc.is_active)
+            )
+    except Exception as e:
+        logger.error(f"Error in /myaccounts: {e}", exc_info=True)
+        await message.answer(f"❌ Error displaying accounts list: {html.escape(str(e))}")
 
 
 

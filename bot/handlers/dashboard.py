@@ -70,17 +70,20 @@ async def show_dashboard(message: types.Message):
         )
         errors_today = (await db.execute(stmt_err)).scalar() or 0
 
-    dashboard_text = (
-        f"<b>📊 SaaS User Dashboard</b>\n\n"
-        f"<b>👤 User:</b> {user.full_name or user.username or message.from_user.id}\n"
-        f"<b>💳 Subscription:</b> {sub_status}\n"
-        f"<b>⏳ Days Remaining:</b> {days_str}\n"
-        f"<b>📱 Connected Accounts:</b> {acc_count} / {max_allowed}\n"
-        f"<b>📢 Total Groups Added:</b> {total_groups}\n"
-        f"<b>⚡ Schedule Status:</b> {status_str}\n"
-        f"<b>📤 Messages Sent Today:</b> {sent_today}\n"
-        f"<b>⚠️ Errors/Warnings Today:</b> {errors_today}\n"
-    )
-
-    await message.answer(dashboard_text)
+    import html
+    try:
+        dashboard_text = (
+            f"<b>📊 SaaS User Dashboard</b>\n\n"
+            f"<b>👤 User:</b> {html.escape(user.full_name or user.username or str(message.from_user.id))}\n"
+            f"<b>💳 Subscription:</b> {sub_status}\n"
+            f"<b>⏳ Days Remaining:</b> {days_str}\n"
+            f"<b>📱 Connected Accounts:</b> {acc_count} / {max_allowed}\n"
+            f"<b>📢 Total Groups Added:</b> {total_groups}\n"
+            f"<b>⚡ Schedule Status:</b> {status_str}\n"
+            f"<b>📤 Messages Sent Today:</b> {sent_today}\n"
+            f"<b>⚠️ Errors/Warnings Today:</b> {errors_today}\n"
+        )
+        await message.answer(dashboard_text)
+    except Exception as e:
+        await message.answer(f"❌ Error displaying dashboard: {html.escape(str(e))}")
 

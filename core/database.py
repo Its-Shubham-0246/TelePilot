@@ -45,18 +45,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Safe schema migration for new referral columns on existing database
-        from sqlalchemy import text
-        migrations = [
-            "ALTER TABLE users ADD COLUMN referrer_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
-            "ALTER TABLE users ADD COLUMN ref_commission_rate FLOAT DEFAULT 0.30",
-            "ALTER TABLE users ADD COLUMN referral_balance FLOAT DEFAULT 0.0",
-            "ALTER TABLE users ADD COLUMN total_withdrawn FLOAT DEFAULT 0.0",
-            "ALTER TABLE telegram_accounts ADD COLUMN current_msg_index INTEGER DEFAULT 0",
-        ]
-        for m in migrations:
-            try:
+
+    # Safe schema migration for new columns on existing database
+    # Each ALTER TABLE runs in its own transaction so an existing column error does not abort subsequent migrations in PostgreSQL.
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE users ADD COLUMN referrer_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "ALTER TABLE users ADD COLUMN ref_commission_rate FLOAT DEFAULT 0.30",
+        "ALTER TABLE users ADD COLUMN referral_balance FLOAT DEFAULT 0.0",
+        "ALTER TABLE users ADD COLUMN total_withdrawn FLOAT DEFAULT 0.0",
+        "ALTER TABLE telegram_accounts ADD COLUMN current_msg_index INTEGER DEFAULT 0",
+    ]
+    for m in migrations:
+        try:
+            async with engine.begin() as conn:
                 await conn.execute(text(m))
-            except Exception:
-                pass
+        except Exception:
+            pass
 

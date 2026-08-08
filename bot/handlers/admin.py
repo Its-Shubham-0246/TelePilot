@@ -498,6 +498,22 @@ async def admin_purge_db(message: types.Message):
         await message.answer(f"❌ Error optimizing database: {html.escape(str(e))}")
 
 
+@router.message(Command("migratedb", "migrateschema"))
+async def admin_migrate_db(message: types.Message):
+    """Admin: Force database schema migrations (adds missing columns like current_msg_index)."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    from core.database import init_db
+    try:
+        await init_db()
+        await message.answer("✅ <b>Database schema migration executed successfully!</b>\n\nAll missing columns (like <code>current_msg_index</code>) have been applied to Railway PostgreSQL.")
+    except Exception as e:
+        logger.error(f"Error in /migratedb: {e}", exc_info=True)
+        await message.answer(f"❌ Error during database migration: {html.escape(str(e))}")
+
+
 @router.message(Command("cleargroupalerts"))
 async def admin_clear_group_alerts(message: types.Message):
     """Admin: clear discovered_groups memory so missing group alerts trigger again on next broadcast."""

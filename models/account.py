@@ -1,9 +1,12 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from core.database import Base
 from core.security import encrypt_session_string, decrypt_session_string
+
+if TYPE_CHECKING:
+    from models.user import User
 
 
 class TelegramAccount(Base):

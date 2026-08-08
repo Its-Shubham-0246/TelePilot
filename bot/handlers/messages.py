@@ -133,6 +133,7 @@ async def process_common_message(message: types.Message, state: FSMContext):
             for acc in accs:
                 acc.custom_message = msg_text
                 acc.current_msg_index = 0
+                acc.last_used_at = None
             await db.commit()
             acc_count = len(accs)
         else:
@@ -141,7 +142,7 @@ async def process_common_message(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"✅ <b>Common Message set for ALL {acc_count} connected accounts!</b>\n\n"
-        f"All accounts will now send this message sequentially at the exact same scheduled interval.",
+        f"🚀 <b>First broadcast will launch immediately</b>, and subsequent broadcasts will rotate sequentially at your scheduled interval.",
         reply_markup=get_main_menu_keyboard()
     )
 
@@ -183,10 +184,9 @@ async def process_common_timer_input(message: types.Message, state: FSMContext):
                     TelegramAccount.is_active == True
                 )
             )).scalars().all()
-            now = datetime.utcnow().replace(microsecond=0)
             for acc in accs:
                 acc.interval_minutes = minutes
-                acc.last_used_at = now
+                acc.last_used_at = None
             await db.commit()
             acc_count = len(accs)
         else:
@@ -309,10 +309,9 @@ async def handle_timer_preset_click(callback: types.CallbackQuery, state: FSMCon
                         TelegramAccount.is_active == True
                     )
                 )).scalars().all()
-                now = datetime.utcnow().replace(microsecond=0)
                 for a in accs:
                     a.interval_minutes = minutes
-                    a.last_used_at = now
+                    a.last_used_at = None
                 await db.commit()
                 acc_count = len(accs)
                 phone_info = f"across ALL {acc_count} accounts"

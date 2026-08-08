@@ -343,6 +343,7 @@ class MTProtoService:
 
                 logger.info(f"Found {len(groups)} joined groups. Starting single-connection broadcast...")
 
+                consecutive_skips = 0
                 for index, (group_entity, group_title) in enumerate(groups):
                     if index > 0:
                         # Human-like delay: 2.5s base + 0.5-2.0s jitter = ~3.0s-4.5s between groups
@@ -373,6 +374,7 @@ class MTProtoService:
 
                             results.append((group_title, True, f"Sent to {group_title}", None))
                             sent = True
+                            consecutive_skips = 0
                             break
 
                         except FloodWaitError as e:
@@ -393,6 +395,7 @@ class MTProtoService:
                             logger.warning(f"[Broadcast] Banned/invalid peer in '{group_title}': {e}")
                             results.append((group_title, False, f"Banned or invalid peer: {e}", None))
                             sent = True  # No point retrying
+                            consecutive_skips += 1
                             break
 
                         except (ChatWriteForbiddenError, ChatAdminRequiredError) as e:
@@ -400,6 +403,7 @@ class MTProtoService:
                             logger.warning(f"[Broadcast] No write permission in '{group_title}': {e}")
                             results.append((group_title, False, f"Write not allowed: {e}", None))
                             sent = True  # No point retrying
+                            consecutive_skips += 1
                             break
 
                         except ChannelPrivateError as e:
@@ -407,6 +411,7 @@ class MTProtoService:
                             logger.warning(f"[Broadcast] Channel private '{group_title}': {e}")
                             results.append((group_title, False, f"Channel is now private: {e}", None))
                             sent = True
+                            consecutive_skips += 1
                             break
 
                         except Exception as e:
@@ -416,6 +421,7 @@ class MTProtoService:
                                 logger.warning(f"[Broadcast] Permanent skip '{group_title}': {err_str}")
                                 results.append((group_title, False, f"Permanent: {err_str}", None))
                                 sent = True
+                                consecutive_skips += 1
                                 break
                             elif attempt == 0:
                                 # Transient error — wait 2s and retry once
@@ -426,6 +432,10 @@ class MTProtoService:
                                 logger.error(f"[Broadcast] Failed '{group_title}' after retry: {e}")
                                 results.append((group_title, False, f"Failed after retry: {err_str}", None))
                                 sent = True
+
+                    if consecutive_skips >= 10:
+                        logger.warning(f"[Broadcast] 10 consecutive non-writable groups for {phone_number} — early stopping broadcast cycle for efficiency.")
+                        break
 
                     if not sent:
                         results.append((group_title, False, "Unknown failure", None))

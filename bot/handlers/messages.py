@@ -190,7 +190,7 @@ async def open_account_msg_config(callback: types.CallbackQuery):
             await callback.answer("Account not found.", show_alert=True)
             return
 
-        g_count = await mtproto_service.get_joined_group_count(acc.get_session_string())
+        g_count = await mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number)
         msg_status = f"<code>{acc.custom_message}</code>" if acc.custom_message else "<i>Not Set</i>"
         enabled_status = "🟢 ENABLED" if acc.auto_group_enabled else "🔴 DISABLED"
         

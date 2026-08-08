@@ -449,13 +449,15 @@ class MTProtoService:
                 except Exception:
                     pass
 
-    async def fetch_joined_groups(self, session_str: str) -> List[Tuple[any, str]]:
+    async def fetch_joined_groups(self, session_str: str, phone_number: Optional[str] = None) -> List[Tuple[any, str]]:
         """
         Fetches all joined groups and supergroups for an account.
         Returns list of (dialog_entity, dialog_title).
         """
+        if not session_str:
+            return []
         session = StringSession(session_str)
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
         groups = []
         try:
             await client.connect()
@@ -466,7 +468,7 @@ class MTProtoService:
                     groups.append((dialog.entity, dialog.name or str(dialog.id)))
             return groups
         except Exception as e:
-            logger.error(f"Error fetching dialogs: {e}")
+            logger.error(f"Error fetching dialogs for {phone_number}: {e}")
             return []
         finally:
             try:
@@ -474,17 +476,18 @@ class MTProtoService:
             except Exception:
                 pass
 
-    async def get_joined_group_count(self, session_str: str, timeout: float = 10.0) -> int:
+    async def get_joined_group_count(self, session_str: str, phone_number: Optional[str] = None, timeout: float = 3.0) -> int:
         """
-        Fetches joined group count for an account session with timeout safety.
+        Fetches joined group count for an account session with lock and timeout safety.
         """
         if not session_str:
             return 0
         try:
-            groups = await asyncio.wait_for(self.fetch_joined_groups(session_str), timeout=timeout)
-            return len(groups)
+            async with self.get_account_lock(phone_number):
+                groups = await asyncio.wait_for(self.fetch_joined_groups(session_str, phone_number=phone_number), timeout=timeout)
+                return len(groups)
         except Exception as e:
-            logger.warning(f"Error fetching joined group count: {e}")
+            logger.warning(f"Error fetching joined group count for {phone_number}: {e}")
             return 0
 
 
@@ -548,48 +551,48 @@ class MTProtoService:
         finally:
             await client.disconnect()
 
-    async def fetch_latest_otp(self, session_str: str) -> Tuple[bool, str]:
+    async def fetch_latest_otp(self, session_str: str, phone_number: Optional[str] = None) -> Tuple[bool, str]:
         """
         Connects via MTProto session and fetches the latest OTP / official message from Telegram (777000).
         Returns (success, result_message).
         """
         import re
         session = StringSession(session_str)
-        client = self._create_client(session)
+        client = self._create_client(session, phone_number)
 
-        try:
-            await client.connect()
-            if not await client.is_user_authorized():
-                return False, "Session expired or user unauthorized."
+        async with self.get_account_lock(phone_number):
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    return False, "Session expired or user unauthorized."
 
-            # 777000 is Telegram's official notification service channel ID
-            messages = await client.get_messages(777000, limit=5)
-            if not messages:
-                return False, "No messages received from Telegram official service (777000)."
+                # 777000 is Telegram's official notification service channel ID
+                messages = await client.get_messages(777000, limit=5)
+                if not messages:
+                    return False, "No messages received from Telegram official service (777000)."
 
-            otp_texts = []
-            for msg in messages:
-                if not msg.text:
-                    continue
-                # Search for 5 or 6 digit OTP codes
-                codes = re.findall(r'\b\d{5,6}\b', msg.text)
-                time_str = msg.date.strftime('%Y-%m-%d %H:%M:%S UTC') if msg.date else "Unknown time"
-                if codes:
-                    otp_texts.append(f"🔑 <b>OTP Code:</b> <code>{codes[0]}</code>\n  └ <i>Received:</i> {time_str}\n  └ <i>Text:</i> {msg.text[:150]}")
-                else:
-                    otp_texts.append(f"📩 <i>Notice ({time_str}):</i> {msg.text[:150]}")
+                otp_texts = []
+                for msg in messages:
+                    if not msg.text:
+                        continue
+                    codes = re.findall(r'\b\d{5,6}\b', msg.text)
+                    time_str = msg.date.strftime('%Y-%m-%d %H:%M:%S UTC') if msg.date else "Unknown time"
+                    if codes:
+                        otp_texts.append(f"🔑 <b>OTP Code:</b> <code>{codes[0]}</code>\n  └ <i>Received:</i> {time_str}\n  └ <i>Text:</i> {msg.text[:150]}")
+                    else:
+                        otp_texts.append(f"📩 <i>Notice ({time_str}):</i> {msg.text[:150]}")
 
-            if not otp_texts:
-                return False, "No OTP messages found in recent Telegram notifications."
+                if not otp_texts:
+                    return False, "No OTP messages found in recent Telegram notifications."
 
-            return True, "\n\n".join(otp_texts)
+                return True, "\n\n".join(otp_texts)
 
-        except Exception as e:
-            logger.error(f"Failed to fetch OTP for session: {e}")
-            return False, f"Error fetching OTP: {e}"
+            except Exception as e:
+                logger.error(f"Failed to fetch OTP for {phone_number}: {e}")
+                return False, f"Error fetching OTP: {e}"
 
-        finally:
-            await client.disconnect()
+            finally:
+                await client.disconnect()
 
 
 mtproto_service = MTProtoService()

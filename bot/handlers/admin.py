@@ -436,7 +436,7 @@ async def admin_list_accounts(message: types.Message):
             return
 
         group_counts = await asyncio.gather(*[
-            mtproto_service.get_joined_group_count(acc.get_session_string()) for acc, _ in accounts_data
+            mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number) for acc, _ in accounts_data
         ])
         total_groups = sum(group_counts)
 
@@ -648,7 +648,7 @@ async def admin_find_user(message: types.Message):
         sub_info = f"🟢 {html.escape(active_sub.plan_name)} (Expires: {active_sub.expires_at.strftime('%Y-%m-%d')})" if active_sub else "🔴 No Active Subscription"
         if accs:
             group_counts = await asyncio.gather(*[
-                mtproto_service.get_joined_group_count(a.get_session_string()) for a in accs
+                mtproto_service.get_joined_group_count(a.get_session_string(), phone_number=a.phone_number) for a in accs
             ])
             acc_list = "\n".join([f"  • <code>{html.escape(a.phone_number)}</code> ({a.status}) — {gc} group(s)" for a, gc in zip(accs, group_counts)])
         else:

@@ -301,7 +301,7 @@ async def list_user_accounts(message: types.Message):
 
     import asyncio
     group_counts = await asyncio.gather(*[
-        mtproto_service.get_joined_group_count(acc.get_session_string()) for acc in accounts
+        mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number) for acc in accounts
     ])
     total_groups = sum(group_counts)
 

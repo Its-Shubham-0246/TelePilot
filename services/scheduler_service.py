@@ -194,12 +194,111 @@ class SchedulerService:
             logger.info(f"[Scheduler] No enabled accounts for schedule #{schedule.id}")
             return
 
-        account_ids = [acc.id for acc in accounts]
+        # 3. Process ready user accounts with stacked in-group delivery ("one below one") if multiple accounts
+        ready_acc_data = []
+        now = datetime.utcnow()
 
-        # 3. Process each ready account in PARALLEL using individual tasks & sessions
+        for acc in accounts:
+            if acc.status == "FLOOD_WAIT":
+                if acc.rate_limit_until and now >= acc.rate_limit_until:
+                    logger.info(f"[Scheduler] FloodWait cleared for {acc.phone_number}. Resuming active status.")
+                    acc.status = "ACTIVE"
+                    acc.rate_limit_until = None
+                    await db.commit()
+                else:
+                    continue
+
+            if acc.last_used_at:
+                seconds_since_last = (now - acc.last_used_at).total_seconds()
+                required_seconds = acc.interval_minutes * 60.0
+                if seconds_since_last < required_seconds:
+                    continue
+
+            if not acc.custom_message:
+                continue
+
+            try:
+                session_str = acc.get_session_string()
+            except Exception:
+                continue
+
+            if not session_str:
+                acc.is_active = False
+                acc.status = "SESSION_EXPIRED"
+                await db.commit()
+                continue
+
+            variants = [v.strip() for v in acc.custom_message.split("---") if v.strip()] or [acc.custom_message]
+            seq_idx = acc.current_msg_index or 0
+
+            ready_acc_data.append({
+                "id": acc.id,
+                "account": acc,
+                "phone_number": acc.phone_number,
+                "session_str": session_str,
+                "seq_index": seq_idx,
+                "variants": variants,
+            })
+
+        if len(ready_acc_data) > 1:
+            logger.info(f"[Scheduler] Executing STACKED in-group broadcast for {len(ready_acc_data)} accounts of user #{schedule.user_id}")
+            for item in ready_acc_data:
+                item["account"].last_used_at = now
+            await db.commit()
+
+            results_by_account = await mtproto_service.broadcast_multi_account_stacked(
+                accounts_data=ready_acc_data
+            )
+
+            for item in ready_acc_data:
+                acc = item["account"]
+                acc_id = acc.id
+                variants = item["variants"]
+                seq_idx = item["seq_index"]
+                acc_results = results_by_account.get(acc_id, [])
+
+                if len(variants) > 1:
+                    acc.current_msg_index = (seq_idx + 1) % len(variants)
+
+                sent_count = 0
+                failed_count = 0
+                for group_title, success, log_msg, flood_seconds in acc_results:
+                    if log_msg == "DUAL_IP_CONFLICT":
+                        continue
+                    if log_msg == "SESSION_REVOKED":
+                        acc.status = "SESSION_REVOKED"
+                        acc.is_active = False
+                        if user_telegram_id:
+                            await _notify_user(user_telegram_id, f"⚠️ <b>Session Logged Out:</b> Session for <code>{acc.phone_number}</code> was logged out on Telegram.")
+                        break
+
+                    job_log = JobLog(
+                        schedule_id=schedule.id,
+                        account_id=acc.id,
+                        target_chat=group_title,
+                        status="SUCCESS" if success else "FAILED",
+                        sent_at=now,
+                        error_details=None if success else log_msg
+                    )
+                    db.add(job_log)
+                    if success:
+                        sent_count += 1
+                    else:
+                        failed_count += 1
+
+                    if flood_seconds:
+                        acc.status = "FLOOD_WAIT"
+                        acc.rate_limit_until = now + timedelta(seconds=flood_seconds)
+                        break
+
+                await db.commit()
+                logger.info(f"[Scheduler] Stacked finish for {acc.phone_number} — sent={sent_count} failed={failed_count}")
+            return
+
+        # Single account fallback
         account_tasks = [
-            self._process_single_account(acc_id, schedule.id, user_telegram_id)
-            for acc_id in account_ids
+            self._process_single_account(acc.id, schedule.id, user_telegram_id)
+            for acc in accounts
         ]
         await asyncio.gather(*account_tasks, return_exceptions=True)
 

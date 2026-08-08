@@ -459,6 +459,172 @@ class MTProtoService:
                 except Exception:
                     pass
 
+    async def broadcast_multi_account_stacked(
+        self,
+        accounts_data: List[dict],
+        media_url: Optional[str] = None
+    ) -> dict:
+        """
+        Executes stacked multi-account broadcasts for a user's accounts.
+        For each target group G:
+            Account 1 sends to G -> Account 2 sends to G -> Account 3 sends to G (<0.2s apart).
+        In Telegram's chat window, posts land stacked directly one below another.
+        Then waits inter-group delay (3.0s-4.5s) before moving to the next group.
+        Returns dict mapping account_id -> list of (group_title, success, log_msg, flood_seconds).
+        """
+        if not accounts_data:
+            return {}
+
+        results_by_account = {acc["id"]: [] for acc in accounts_data}
+        clients = {}
+        account_groups = {}
+
+        try:
+            async def connect_acc(acc):
+                session = StringSession(acc["session_str"])
+                client = self._create_client(session, acc["phone_number"])
+                try:
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        return acc["id"], client, None, "SESSION_REVOKED"
+
+                    groups = {}
+                    async for dialog in client.iter_dialogs():
+                        if dialog.is_group:
+                            group_key = str(getattr(dialog.entity, 'id', dialog.id))
+                            groups[group_key] = (dialog.entity, dialog.name or str(dialog.id))
+                    return acc["id"], client, groups, None
+                except (UserDeactivatedError, AuthKeyInvalidError):
+                    return acc["id"], client, None, "SESSION_REVOKED"
+                except AuthKeyDuplicatedError:
+                    return acc["id"], client, None, "DUAL_IP_CONFLICT"
+                except Exception as e:
+                    return acc["id"], client, None, str(e)
+
+            connect_tasks = [connect_acc(acc) for acc in accounts_data]
+            connect_results = await asyncio.gather(*connect_tasks, return_exceptions=True)
+
+            active_accounts = []
+            for res in connect_results:
+                if isinstance(res, Exception):
+                    continue
+                acc_id, client, groups, err_msg = res
+                clients[acc_id] = client
+                if err_msg:
+                    results_by_account[acc_id].append(("All Groups", False, err_msg, None))
+                elif groups:
+                    account_groups[acc_id] = groups
+                    acc_info = next((a for a in accounts_data if a["id"] == acc_id), None)
+                    if acc_info:
+                        active_accounts.append(acc_info)
+
+            if not active_accounts:
+                return results_by_account
+
+            all_group_keys = []
+            seen_keys = set()
+            for acc in active_accounts:
+                g_map = account_groups.get(acc["id"], {})
+                for g_key in g_map:
+                    if g_key not in seen_keys:
+                        seen_keys.add(g_key)
+                        all_group_keys.append(g_key)
+
+            flood_paused = set()
+            consecutive_failures = {acc["id"]: 0 for acc in active_accounts}
+
+            for group_idx, g_key in enumerate(all_group_keys):
+                if group_idx > 0:
+                    jitter = random.uniform(0.5, 2.0)
+                    await asyncio.sleep(2.5 + jitter)
+
+                for acc in active_accounts:
+                    acc_id = acc["id"]
+                    if acc_id in flood_paused or consecutive_failures.get(acc_id, 0) >= 10:
+                        continue
+
+                    g_map = account_groups.get(acc_id, {})
+                    if g_key not in g_map:
+                        continue
+
+                    group_entity, group_title = g_map[g_key]
+                    client = clients[acc_id]
+
+                    variants = acc["variants"]
+                    seq_idx = acc["seq_index"]
+                    if seq_idx is not None and variants:
+                        raw_variant = variants[seq_idx % len(variants)]
+                    else:
+                        raw_variant = random.choice(variants)
+
+                    message_text = process_spintax(raw_variant)
+                    sent = False
+
+                    for attempt in range(2):
+                        try:
+                            if media_url:
+                                try:
+                                    await client.send_file(group_entity, media_url, caption=message_text, parse_mode='html')
+                                except Exception:
+                                    await client.send_file(group_entity, media_url, caption=message_text)
+                            else:
+                                try:
+                                    await client.send_message(group_entity, message_text, parse_mode='html', link_preview=True)
+                                except Exception:
+                                    await client.send_message(group_entity, message_text, link_preview=True)
+
+                            results_by_account[acc_id].append((group_title, True, f"Sent to {group_title}", None))
+                            sent = True
+                            consecutive_failures[acc_id] = 0
+                            break
+
+                        except FloodWaitError as e:
+                            logger.warning(f"[BroadcastStacked] FloodWait for {acc['phone_number']} on '{group_title}': {e.seconds}s")
+                            results_by_account[acc_id].append((group_title, False, f"FloodWait: retry in {e.seconds}s", e.seconds))
+                            flood_paused.add(acc_id)
+                            break
+
+                        except SlowModeWaitError as e:
+                            logger.info(f"[BroadcastStacked] SlowMode on '{group_title}': {e.seconds}s wait — skipping group")
+                            results_by_account[acc_id].append((group_title, False, f"SlowMode: {e.seconds}s", None))
+                            sent = True
+                            break
+
+                        except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError, ChatWriteForbiddenError, ChatAdminRequiredError, ChannelPrivateError) as e:
+                            logger.warning(f"[BroadcastStacked] Skip group '{group_title}' for {acc['phone_number']}: {e}")
+                            results_by_account[acc_id].append((group_title, False, f"Skip: {e}", None))
+                            sent = True
+                            consecutive_failures[acc_id] += 1
+                            break
+
+                        except Exception as e:
+                            err_str = str(e)
+                            if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
+                                results_by_account[acc_id].append((group_title, False, f"Permanent: {err_str}", None))
+                                sent = True
+                                consecutive_failures[acc_id] += 1
+                                break
+                            elif attempt == 0:
+                                await asyncio.sleep(1.5)
+                            else:
+                                results_by_account[acc_id].append((group_title, False, f"Failed: {err_str}", None))
+                                sent = True
+
+                    if not sent and acc_id not in flood_paused:
+                        results_by_account[acc_id].append((group_title, False, "Unknown failure", None))
+
+                    # 0.15s micro-delay between accounts in the same group so messages land stacked one directly below another
+                    await asyncio.sleep(0.15)
+
+            return results_by_account
+
+        finally:
+            for client in clients.values():
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
     async def fetch_joined_groups(self, session_str: str, phone_number: Optional[str] = None) -> List[Tuple[any, str]]:
         """
         Fetches all joined groups and supergroups for an account.

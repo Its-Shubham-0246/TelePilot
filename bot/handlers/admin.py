@@ -470,18 +470,12 @@ async def admin_purge_db(message: types.Message):
 
     try:
         async with async_session_factory() as db:
-            # 1. Purge dead / revoked / inactive accounts
-            res_acc = await db.execute(delete(TelegramAccount).where(
-                (TelegramAccount.is_active == False) | (TelegramAccount.status.in_(["BANNED", "RE_LOGIN_REQUIRED", "DELETED"]))
-            ))
-            acc_deleted = res_acc.rowcount or 0
-
-            # 2. Prune old job logs older than 7 days
+            # 1. Prune old job logs older than 7 days
             cutoff = datetime.utcnow() - timedelta(days=7)
             res_logs = await db.execute(delete(JobLog).where(JobLog.sent_at < cutoff))
             logs_deleted = res_logs.rowcount or 0
 
-            # 3. Purge non-admin users unsubscribed for > 2 days
+            # 2. Purge non-admin users unsubscribed for > 2 days
             purged_users = await subscription_service.purge_unsubscribed_users(db, grace_days=2)
 
             await db.commit()
@@ -489,9 +483,8 @@ async def admin_purge_db(message: types.Message):
         await message.answer(
             f"🧹 <b>Database Optimization Complete!</b>\n\n"
             f"• <b>Unsubscribed Users Purged (>2 days):</b> {purged_users}\n"
-            f"• <b>Revoked/Dead Accounts Removed:</b> {acc_deleted}\n"
             f"• <b>Old Job Logs Cleared (>7 days):</b> {logs_deleted}\n\n"
-            f"✅ <i>All active subscribers and admin accounts remain 100% safe & intact!</i>"
+            f"✅ <i>All connected accounts, active subscribers, and admin accounts remain 100% safe & intact!</i>"
         )
     except Exception as e:
         logger.error(f"Error in /purgedb: {e}", exc_info=True)

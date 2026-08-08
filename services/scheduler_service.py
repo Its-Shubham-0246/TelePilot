@@ -250,13 +250,14 @@ class SchedulerService:
                     session_str = ""
 
                 if not session_str:
-                    logger.error(f"[Scheduler] {account.phone_number} — session invalid, auto-removing from DB.")
-                    await db.delete(account)
+                    logger.error(f"[Scheduler] {account.phone_number} — session invalid or expired.")
+                    account.is_active = False
+                    account.status = "SESSION_EXPIRED"
                     await db.commit()
                     if user_telegram_id:
                         await _notify_user(
                             user_telegram_id,
-                            f"🔴 <b>Account Removed:</b> Session for <code>{account.phone_number}</code> expired or was invalid. It has been automatically removed from the database. Tap <b>➕ Add Account</b> to reconnect."
+                            f"🔴 <b>Account Action Required:</b> Session for <code>{account.phone_number}</code> requires re-authentication. Tap <b>👤 My Accounts</b> to reconnect."
                         )
                     return
 

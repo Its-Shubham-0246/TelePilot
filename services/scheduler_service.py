@@ -32,6 +32,7 @@ class SchedulerService:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
         self._semaphore: Optional[asyncio.Semaphore] = None
+        self.active_running_schedules = set()
 
     @property
     def account_semaphore(self) -> asyncio.Semaphore:
@@ -76,13 +77,11 @@ class SchedulerService:
                     await db.commit()
                     return True
 
-                # If lock belongs to us, renew timestamp
                 if lock.instance_id == INSTANCE_ID:
                     lock.updated_at = now
                     await db.commit()
                     return True
 
-                # If lock belongs to another instance, check if it has expired (> 30s old)
                 time_since_update = (now - lock.updated_at).total_seconds()
                 if time_since_update > LOCK_TTL_SECONDS:
                     logger.info(f"[SchedulerLock] Previous leader ({lock.instance_id[:8]}) expired after {time_since_update:.1f}s. Claiming leadership for {INSTANCE_ID[:8]}.")
@@ -91,30 +90,23 @@ class SchedulerService:
                     await db.commit()
                     return True
                 else:
-                    # Active leader exists in another container
                     return False
         except Exception as e:
             logger.warning(f"[SchedulerLock] claim_leadership warning: {e}")
             return True
 
     async def is_leader(self) -> bool:
-        """
-        Checks if this container instance is currently the registered leader.
-        """
         return await self.claim_leadership()
 
     async def process_active_schedules(self):
-        """Iterates over active schedules and runs group broadcasts for enabled accounts in parallel."""
-        # Leader Lock Check — prevent dual-container execution during Railway rolling deploys
+        """Iterates over active schedules and runs group broadcasts for enabled accounts in parallel without blocking the master runner."""
         if not await self.is_leader():
             logger.info("[SchedulerLock] Skipping schedule processing — another container instance is active leader.")
             return
 
         try:
-            # Step 1: Run database cleanup to prune old logs
             await self.cleanup_database()
 
-            # Step 2: Collect active schedule IDs using a short-lived session
             async with async_session_factory() as db:
                 stmt = select(Schedule).where(Schedule.is_active == True)
                 result = await db.execute(stmt)
@@ -123,12 +115,21 @@ class SchedulerService:
             if not schedule_ids:
                 return
 
-            # Step 3: Run all active schedule checks concurrently in parallel
-            tasks = [self._process_single_schedule(sched_id) for sched_id in schedule_ids]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Launch each schedule in non-blocking background task so master runner ticks every 5s cleanly
+            for sched_id in schedule_ids:
+                if sched_id in self.active_running_schedules:
+                    continue
+                self.active_running_schedules.add(sched_id)
+                asyncio.create_task(self._run_schedule_task(sched_id))
 
         except Exception as e:
             logger.error(f"[Scheduler] process_active_schedules failed: {type(e).__name__}: {e}", exc_info=True)
+
+    async def _run_schedule_task(self, sched_id: int):
+        try:
+            await self._process_single_schedule(sched_id)
+        finally:
+            self.active_running_schedules.discard(sched_id)
 
     async def cleanup_database(self):
         """Safely purges job logs older than 7 days and unsubscribed users (>2 days without active sub)."""

@@ -273,15 +273,22 @@ class SchedulerService:
 
                 # Run single-connection broadcast to all joined groups
                 variants = [v.strip() for v in message_text.split("---") if v.strip()] or [message_text]
+                seq_idx = account.current_msg_index or 0
+
                 try:
                     broadcast_results = await mtproto_service.broadcast_to_account_groups(
                         session_str=session_str,
                         message_variants=variants,
-                        phone_number=account.phone_number
+                        phone_number=account.phone_number,
+                        seq_index=seq_idx
                     )
                 except Exception as broadcast_err:
                     logger.error(f"[Scheduler] broadcast failed for {account.phone_number}: {broadcast_err}")
                     return
+
+                if len(variants) > 1:
+                    account.current_msg_index = (seq_idx + 1) % len(variants)
+                    await db.commit()
 
                 if not broadcast_results:
                     logger.info(f"[Scheduler] {account.phone_number} — no groups found or session unauthorized")

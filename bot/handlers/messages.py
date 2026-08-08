@@ -3,6 +3,7 @@ from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
+from datetime import datetime
 
 from core.database import async_session_factory
 from models.user import User
@@ -24,6 +25,8 @@ router = Router()
 class ConfigAccountMsgStates(StatesGroup):
     waiting_for_message = State()
     waiting_for_timer = State()
+    waiting_for_common_message = State()
+    waiting_for_common_timer = State()
 
 
 @router.message(F.text == "💬 Messages")
@@ -58,14 +61,124 @@ async def show_accounts_message_list(event_obj, edit: bool = False):
         return
 
     text = (
-        "<b>💬 Config Messages & Timers per Account</b>\n\n"
-        "Select an account below to set its auto-broadcasting message, adjust timer interval, or enable/disable auto-messaging:"
+        "<b>💬 Config Messages & Timers for Accounts</b>\n\n"
+        "🌐 <b>Common Message & Timer (All Accounts):</b> Set a shared message and timer to synchronize auto-messaging across all accounts simultaneously.\n\n"
+        "📱 <b>Individual Account Config:</b> Select an account below to configure individual messages and timers."
     )
     kb = get_messages_accounts_keyboard(accounts)
     if edit and isinstance(event_obj, types.Message):
         await event_obj.edit_text(text, reply_markup=kb)
     else:
         await event_obj.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "cfg_common_msg")
+async def start_set_common_message(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(ConfigAccountMsgStates.waiting_for_common_message)
+
+    await callback.message.answer(
+        "<b>🌐 Set Common Auto-Messaging Text for ALL Accounts</b>\n\n"
+        "Send your message text below. It will be applied to <b>ALL your connected accounts simultaneously</b>!\n\n"
+        "💡 <b>Sequential Switching:</b> Separate multiple message versions using <code>---</code> on a new line. Messages will switch sequentially (Msg 1 ➔ Msg 2 ➔ Msg 3 ➔ Msg 1...) on every interval cycle for all accounts at the exact same scheduled time!\n\n"
+        "💡 <b>Spintax Randomization:</b> Use <code>{Click Here|Watch Now|Download Free}</code> for word variations per send.\n\n"
+        "Tap <b>🔙 Back to Main Menu</b> to cancel.",
+        reply_markup=get_cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@router.message(ConfigAccountMsgStates.waiting_for_common_message)
+async def process_common_message(message: types.Message, state: FSMContext):
+    if message.text.strip() == "🔙 Back to Main Menu":
+        await state.clear()
+        await message.answer("🏠 Returned to main menu.", reply_markup=get_main_menu_keyboard())
+        return
+
+    msg_text = message.text.strip()
+
+    async with async_session_factory() as db:
+        user = (await db.execute(select(User).where(User.telegram_id == message.from_user.id))).scalars().first()
+        if user:
+            accs = (await db.execute(
+                select(TelegramAccount).where(
+                    TelegramAccount.user_id == user.id,
+                    TelegramAccount.is_active == True
+                )
+            )).scalars().all()
+            for acc in accs:
+                acc.custom_message = msg_text
+                acc.current_msg_index = 0
+            await db.commit()
+            acc_count = len(accs)
+        else:
+            acc_count = 0
+
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Common Message set for ALL {acc_count} connected accounts!</b>\n\n"
+        f"All accounts will now send this message sequentially at the exact same scheduled interval.",
+        reply_markup=get_main_menu_keyboard()
+    )
+
+
+@router.callback_query(F.data == "cfg_common_timer")
+async def start_set_common_timer(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(ConfigAccountMsgStates.waiting_for_common_timer)
+
+    kb = get_timer_preset_keyboard(0)
+    await callback.message.answer(
+        "<b>⏱ Select Common Timer Interval for ALL Accounts</b>\n\n"
+        "Select how often ALL your connected accounts should send messages simultaneously:\n"
+        "👉 <b>Choose a preset below</b> or type custom minutes (e.g. <code>15</code>):\n\n"
+        "<i>All accounts will be synchronized to trigger at the exact same time!</i>",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.message(ConfigAccountMsgStates.waiting_for_common_timer)
+async def process_common_timer_input(message: types.Message, state: FSMContext):
+    if message.text.strip() == "🔙 Back to Main Menu":
+        await state.clear()
+        await message.answer("🏠 Returned to main menu.", reply_markup=get_main_menu_keyboard())
+        return
+
+    try:
+        minutes = int(message.text.strip())
+        minutes = max(minutes, 1)
+    except ValueError:
+        minutes = 30
+
+    async with async_session_factory() as db:
+        user = (await db.execute(select(User).where(User.telegram_id == message.from_user.id))).scalars().first()
+        if user:
+            accs = (await db.execute(
+                select(TelegramAccount).where(
+                    TelegramAccount.user_id == user.id,
+                    TelegramAccount.is_active == True
+                )
+            )).scalars().all()
+            now = datetime.utcnow()
+            for acc in accs:
+                acc.interval_minutes = minutes
+                acc.last_used_at = now
+            await db.commit()
+            acc_count = len(accs)
+        else:
+            acc_count = 0
+
+    await state.clear()
+
+    if minutes >= 60:
+        time_display = f"{minutes // 60} hour(s)"
+    else:
+        time_display = f"{minutes} minute(s)"
+
+    await message.answer(
+        f"⏱ <b>Common timer interval updated to every {time_display} across ALL {acc_count} accounts!</b>\n\n"
+        f"All accounts are now synchronized to trigger at the exact same time.",
+        reply_markup=get_main_menu_keyboard()
+    )
 
 
 @router.callback_query(F.data.startswith("acc_msg_cfg_"))
@@ -92,7 +205,6 @@ async def open_account_msg_config(callback: types.CallbackQuery):
         kb = get_account_msg_config_keyboard(acc.id, acc.auto_group_enabled)
         await callback.message.edit_text(info, reply_markup=kb)
         await callback.answer()
-
 
 
 @router.callback_query(F.data.startswith("cfg_set_msg_"))
@@ -129,6 +241,7 @@ async def process_account_message(message: types.Message, state: FSMContext):
         acc = await db.get(TelegramAccount, acc_id)
         if acc:
             acc.custom_message = msg_text
+            acc.current_msg_index = 0
             await db.commit()
             phone = acc.phone_number
 
@@ -162,13 +275,33 @@ async def handle_timer_preset_click(callback: types.CallbackQuery, state: FSMCon
     minutes = int(parts[4])
 
     async with async_session_factory() as db:
-        acc = await db.get(TelegramAccount, acc_id)
-        if acc:
-            from datetime import datetime
-            acc.interval_minutes = minutes
-            acc.last_used_at = datetime.utcnow()
-            await db.commit()
-            phone = acc.phone_number
+        if acc_id == 0:
+            user = (await db.execute(select(User).where(User.telegram_id == callback.from_user.id))).scalars().first()
+            if user:
+                accs = (await db.execute(
+                    select(TelegramAccount).where(
+                        TelegramAccount.user_id == user.id,
+                        TelegramAccount.is_active == True
+                    )
+                )).scalars().all()
+                now = datetime.utcnow()
+                for a in accs:
+                    a.interval_minutes = minutes
+                    a.last_used_at = now
+                await db.commit()
+                acc_count = len(accs)
+                phone_info = f"across ALL {acc_count} accounts"
+            else:
+                phone_info = "all accounts"
+        else:
+            acc = await db.get(TelegramAccount, acc_id)
+            if acc:
+                acc.interval_minutes = minutes
+                acc.last_used_at = datetime.utcnow()
+                await db.commit()
+                phone_info = f"for account <code>{acc.phone_number}</code>"
+            else:
+                phone_info = ""
 
     await state.clear()
 
@@ -178,7 +311,7 @@ async def handle_timer_preset_click(callback: types.CallbackQuery, state: FSMCon
         time_display = f"{minutes} minute(s)"
 
     await callback.message.answer(
-        f"⏱ Timer interval updated to <b>every {time_display}</b> for account <code>{phone}</code>!",
+        f"⏱ Timer interval updated to <b>every {time_display}</b> {phone_info}!",
         reply_markup=get_main_menu_keyboard()
     )
     await callback.answer()
@@ -201,13 +334,32 @@ async def process_account_timer(message: types.Message, state: FSMContext):
     acc_id = data.get("account_id")
 
     async with async_session_factory() as db:
-        acc = await db.get(TelegramAccount, acc_id)
-        if acc:
-            from datetime import datetime
-            acc.interval_minutes = minutes
-            acc.last_used_at = datetime.utcnow()
-            await db.commit()
-            phone = acc.phone_number
+        if acc_id == 0:
+            user = (await db.execute(select(User).where(User.telegram_id == message.from_user.id))).scalars().first()
+            if user:
+                accs = (await db.execute(
+                    select(TelegramAccount).where(
+                        TelegramAccount.user_id == user.id,
+                        TelegramAccount.is_active == True
+                    )
+                )).scalars().all()
+                now = datetime.utcnow()
+                for a in accs:
+                    a.interval_minutes = minutes
+                    a.last_used_at = now
+                await db.commit()
+                phone_info = f"across ALL {len(accs)} accounts"
+            else:
+                phone_info = "all accounts"
+        else:
+            acc = await db.get(TelegramAccount, acc_id)
+            if acc:
+                acc.interval_minutes = minutes
+                acc.last_used_at = datetime.utcnow()
+                await db.commit()
+                phone_info = f"for account <code>{acc.phone_number}</code>"
+            else:
+                phone_info = ""
 
     await state.clear()
 
@@ -217,7 +369,7 @@ async def process_account_timer(message: types.Message, state: FSMContext):
         time_display = f"{minutes} minute(s)"
 
     await message.answer(
-        f"⏱ Timer interval updated to <b>every {time_display}</b> for account <code>{phone}</code>!",
+        f"⏱ Timer interval updated to <b>every {time_display}</b> {phone_info}!",
         reply_markup=get_main_menu_keyboard()
     )
 
@@ -233,7 +385,6 @@ async def toggle_account_group_messaging(callback: types.CallbackQuery):
             status_text = "🟢 Enabled (will send messages)" if acc.auto_group_enabled else "🔴 Disabled (will NOT send messages)"
             await callback.answer(f"Account auto-messaging is now {status_text}.")
             
-            # Refresh inline keyboard menu
             msg_preview = acc.custom_message if acc.custom_message else "<i>None set</i>"
             text = (
                 f"<b>⚙️ Configuration for Account:</b> <code>{acc.phone_number}</code>\n\n"

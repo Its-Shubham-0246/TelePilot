@@ -310,10 +310,12 @@ class MTProtoService:
         message_variants: List[str],
         media_url: Optional[str] = None,
         delay_between_groups: float = 1.5,
-        phone_number: Optional[str] = None
+        phone_number: Optional[str] = None,
+        seq_index: Optional[int] = None
     ) -> List[Tuple[str, bool, str, Optional[int]]]:
         """
         Connects once via MTProto session, fetches joined groups, and broadcasts messages with inter-group delay.
+        Supports sequential message rotation if seq_index is provided.
         Returns list of (group_title, success, log_msg, flood_wait_seconds).
         """
         if not message_variants:
@@ -348,7 +350,11 @@ class MTProtoService:
                         jitter = random.uniform(0.5, 2.0)
                         await asyncio.sleep(2.5 + jitter)
 
-                    raw_variant = random.choice(message_variants)
+                    if seq_index is not None and message_variants:
+                        raw_variant = message_variants[seq_index % len(message_variants)]
+                    else:
+                        raw_variant = random.choice(message_variants)
+
                     message_text = process_spintax(raw_variant)
                     sent = False
 

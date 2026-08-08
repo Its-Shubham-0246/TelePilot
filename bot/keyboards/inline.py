@@ -53,7 +53,10 @@ def get_account_manage_keyboard(account_id: int, is_active: bool) -> InlineKeybo
 
 
 def get_messages_accounts_keyboard(accounts: list) -> InlineKeyboardMarkup:
-    buttons = []
+    buttons = [
+        [InlineKeyboardButton(text="🌐 Common Message (All Accounts)", callback_data="cfg_common_msg")],
+        [InlineKeyboardButton(text="⏱ Common Timer (All Accounts)", callback_data="cfg_common_timer")],
+    ]
     for acc in accounts:
         msg_status = "💬 Message Set" if acc.custom_message else "⚠️ No Message"
         toggle_icon = "🟢 ENABLED" if acc.auto_group_enabled else "🔴 DISABLED"
@@ -83,6 +86,8 @@ def get_account_msg_config_keyboard(account_id: int, auto_group_enabled: bool) -
 
 
 def get_timer_preset_keyboard(account_id: int) -> InlineKeyboardMarkup:
+    back_cb = f"acc_msg_cfg_{account_id}" if account_id > 0 else "msg_list_accounts"
+    back_text = "🔙 Back to Account Config" if account_id > 0 else "🔙 Back to Messages"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -98,7 +103,7 @@ def get_timer_preset_keyboard(account_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⌛ 5 hr", callback_data=f"set_timer_val_{account_id}_300"),
             ],
             [
-                InlineKeyboardButton(text="🔙 Back to Account Config", callback_data=f"acc_msg_cfg_{account_id}"),
+                InlineKeyboardButton(text=back_text, callback_data=back_cb),
             ],
         ]
     )

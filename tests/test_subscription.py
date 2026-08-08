@@ -108,3 +108,53 @@ async def test_purge_unsubscribed_users():
         assert res_u2 is not None  # Kept
 
 
+@pytest.mark.asyncio
+async def test_sequential_message_rotation():
+    await init_db()
+    rand_id = random.randint(10000000, 99999999)
+    from models.account import TelegramAccount
+
+    async with async_session_factory() as db:
+        user = User(telegram_id=rand_id, username=f"seq_{rand_id}")
+        db.add(user)
+        await db.commit()
+
+        acc = TelegramAccount(
+            user_id=user.id,
+            phone_number=f"+100{rand_id}",
+            custom_message="Msg 1 --- Msg 2 --- Msg 3",
+            interval_minutes=15,
+            current_msg_index=0
+        )
+        acc.set_session_string("TestSession==")
+        db.add(acc)
+        await db.commit()
+
+        # Step 1: initial index 0
+        variants = [v.strip() for v in acc.custom_message.split("---") if v.strip()]
+        idx1 = acc.current_msg_index
+        assert variants[idx1 % len(variants)] == "Msg 1"
+
+        # Advance index to 1
+        acc.current_msg_index = (idx1 + 1) % len(variants)
+        await db.commit()
+
+        # Step 2: index 1
+        idx2 = acc.current_msg_index
+        assert variants[idx2 % len(variants)] == "Msg 2"
+
+        # Advance index to 2
+        acc.current_msg_index = (idx2 + 1) % len(variants)
+        await db.commit()
+
+        # Step 3: index 2
+        idx3 = acc.current_msg_index
+        assert variants[idx3 % len(variants)] == "Msg 3"
+
+        # Advance index back to 0
+        acc.current_msg_index = (idx3 + 1) % len(variants)
+        await db.commit()
+        assert acc.current_msg_index == 0
+
+
+

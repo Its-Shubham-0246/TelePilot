@@ -19,6 +19,7 @@ class TelegramAccount(Base):
     # Custom message & timer per account
     custom_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     interval_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    current_msg_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     status: Mapped[str] = mapped_column(String(50), default="ACTIVE", nullable=False)  # ACTIVE, FLOOD_WAIT, BANNED, RE_LOGIN_REQUIRED
     rate_limit_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

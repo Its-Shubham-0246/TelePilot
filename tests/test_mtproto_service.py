@@ -54,3 +54,20 @@ async def test_get_joined_group_count_live_success():
         count = await service.get_joined_group_count("fakesession", phone_number=phone)
         assert count == 3
         assert service.get_cached_group_count(phone) == 3
+
+
+def test_paid_and_unwritable_error_helpers():
+    from services.mtproto_service import _is_paid_group_error, _is_unwritable_or_banned_error
+    from telethon.errors import ChatWriteForbiddenError, UserBannedInChannelError
+
+    # Paid group errors
+    assert _is_paid_group_error("PAYMENT_REQUIRED: This group requires Telegram Stars or subscription") is True
+    assert _is_paid_group_error("STAR_PAY_REQUIRED") is True
+    assert _is_paid_group_error("Random error") is False
+
+    # Unwritable / Banned / Read-only errors
+    assert _is_unwritable_or_banned_error(ChatWriteForbiddenError(request=None)) is True
+    assert _is_unwritable_or_banned_error(UserBannedInChannelError(request=None)) is True
+    assert _is_unwritable_or_banned_error(Exception("CHAT_WRITE_FORBIDDEN")) is True
+    assert _is_unwritable_or_banned_error(Exception("This group is READ_ONLY or MUTED")) is True
+    assert _is_unwritable_or_banned_error(Exception("General random error")) is False

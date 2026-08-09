@@ -22,7 +22,19 @@ from telethon.errors import (
     UserNotParticipantError,
     ChannelPrivateError,
     PeerIdInvalidError,
+    ChatRestrictedError,
     FreshResetAuthorisationForbiddenError,
+)
+
+# Paid group keywords — accounts MUST NOT leave paid/star subscription groups automatically!
+_PAID_GROUP_KEYWORDS = (
+    'PAYMENT_REQUIRED',
+    'STAR_PAY',
+    'STARS_REQUIRED',
+    'STARS_PAYMENT',
+    'PREMIUM_ACCOUNT_REQUIRED',
+    'PREMIUM_REQUIRED',
+    'BUY_SUBSCRIPTION',
 )
 
 # Permanent error keywords — these should never be retried (no amount of waiting will fix them)
@@ -42,6 +54,45 @@ _PERMANENT_ERROR_KEYWORDS = (
     'USER_IS_BLOCKED',
     'INPUT_USER_DEACTIVATED',
 )
+
+
+def _is_paid_group_error(err_str: str) -> bool:
+    if not err_str:
+        return False
+    upper = err_str.upper()
+    return any(kw in upper for kw in _PAID_GROUP_KEYWORDS)
+
+
+def _is_unwritable_or_banned_error(exc: Exception) -> bool:
+    if isinstance(exc, (
+        UserBannedInChannelError,
+        UserNotParticipantError,
+        PeerIdInvalidError,
+        ChatWriteForbiddenError,
+        ChatAdminRequiredError,
+        ChannelPrivateError,
+        ChatRestrictedError,
+    )):
+        return True
+
+    err_str = str(exc).upper()
+    unwritable_kws = (
+        'CHAT_WRITE_FORBIDDEN',
+        'CHAT_RESTRICTED',
+        'USER_BANNED_IN_CHANNEL',
+        'CHAT_ADMIN_REQUIRED',
+        'CHANNEL_PRIVATE',
+        'MUTED',
+        'BANNED',
+        'READ_ONLY',
+        'TOPIC_CLOSED',
+        'PLAIN_FORBIDDEN',
+        'CHAT_SEND_PLAIN_FORBIDDEN',
+        'CHATS_ALL_MUTED',
+        'RIGHTS_NOT_ENOUGH',
+        'ADMIN_REQUIRED',
+    )
+    return any(kw in err_str for kw in unwritable_kws)
 
 
 from config import settings
@@ -436,22 +487,28 @@ class MTProtoService:
                             sent = True  # Don't retry, move to next group
                             break
 
-                        except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError, ChatWriteForbiddenError, ChatAdminRequiredError, ChannelPrivateError) as e:
-                            # Muted, banned, or admin-only — auto-leave non-writable group (excluding paid groups)
-                            logger.warning(f"[Broadcast] Non-writable group '{group_title}' for {phone_number}: {e}")
-                            try:
-                                await client.delete_dialog(group_entity)
-                                logger.info(f"[AutoLeave] Account {phone_number} automatically left non-writable group '{group_title}'")
-                            except Exception as leave_err:
-                                logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
-
-                            results.append((group_title, False, f"Auto-Left (Unwritable): {e}", None))
-                            sent = True
-                            consecutive_skips += 1
-                            break
-
                         except Exception as e:
                             err_str = str(e)
+                            if _is_paid_group_error(err_str):
+                                logger.info(f"[Broadcast] Skipped paid group '{group_title}' for {phone_number}: {err_str}")
+                                results.append((group_title, False, f"Paid Group (Skipped): {err_str}", None))
+                                sent = True
+                                consecutive_skips += 1
+                                break
+
+                            if _is_unwritable_or_banned_error(e):
+                                logger.warning(f"[Broadcast] Non-writable/banned/muted group '{group_title}' for {phone_number}: {e}")
+                                try:
+                                    await client.delete_dialog(group_entity)
+                                    logger.info(f"[AutoLeave] Account {phone_number} automatically left non-writable group '{group_title}'")
+                                except Exception as leave_err:
+                                    logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+
+                                results.append((group_title, False, f"Auto-Left (Unwritable): {e}", None))
+                                sent = True
+                                consecutive_skips += 1
+                                break
+
                             # Check for known permanent errors — retry is pointless
                             if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
                                 logger.warning(f"[Broadcast] Permanent skip '{group_title}': {err_str}")
@@ -638,22 +695,44 @@ class MTProtoService:
                             sent = True
                             break
 
-                        except (UserBannedInChannelError, UserNotParticipantError, PeerIdInvalidError, ChatWriteForbiddenError, ChatAdminRequiredError, ChannelPrivateError) as e:
-                            logger.warning(f"[BroadcastStacked] Skip non-writable group '{group_title}' for {acc['phone_number']}: {e}")
-                            self.mark_group_unwriteable(acc["phone_number"], g_key)
-                            try:
-                                await client.delete_dialog(group_entity)
-                                logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left non-writable group '{group_title}'")
-                            except Exception as leave_err:
-                                logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
-
-                            results_by_account[acc_id].append((group_title, False, f"Auto-Left: {e}", None))
-                            sent = True
-                            consecutive_failures[acc_id] += 1
-                            break
-
                         except Exception as e:
                             err_str = str(e)
+                            if _is_paid_group_error(err_str):
+                                self.mark_group_unwriteable(acc["phone_number"], g_key)
+                                logger.info(f"[BroadcastStacked] Skipped paid group '{group_title}' for {acc['phone_number']}: {err_str}")
+                                results_by_account[acc_id].append((group_title, False, f"Paid Group (Skipped): {err_str}", None))
+                                sent = True
+                                consecutive_failures[acc_id] += 1
+                                break
+
+                            if _is_unwritable_or_banned_error(e):
+                                logger.warning(f"[BroadcastStacked] Non-writable/banned/muted group '{group_title}' for {acc['phone_number']}: {e}")
+                                self.mark_group_unwriteable(acc["phone_number"], g_key)
+                                try:
+                                    await client.delete_dialog(group_entity)
+                                    logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left non-writable group '{group_title}'")
+                                except Exception as leave_err:
+                                    logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+
+                                # If it's a channel-wide read-only / forbidden restriction, attempt auto-leave across all active account clients in this group
+                                if isinstance(e, (ChatWriteForbiddenError, ChatAdminRequiredError)) or any(kw in err_str.upper() for kw in ('CHAT_WRITE_FORBIDDEN', 'CHAT_ADMIN_REQUIRED', 'TOPIC_CLOSED', 'READ_ONLY')):
+                                    for other_acc in active_accounts:
+                                        other_id = other_acc["id"]
+                                        if other_id != acc_id and other_id in clients:
+                                            other_g_map = account_groups.get(other_id, {})
+                                            if g_key in other_g_map:
+                                                other_entity, _ = other_g_map[g_key]
+                                                try:
+                                                    await clients[other_id].delete_dialog(other_entity)
+                                                    logger.info(f"[AutoLeave] Account {other_acc['phone_number']} also automatically left read-only group '{group_title}'")
+                                                except Exception:
+                                                    pass
+
+                                results_by_account[acc_id].append((group_title, False, f"Auto-Left: {e}", None))
+                                sent = True
+                                consecutive_failures[acc_id] += 1
+                                break
+
                             if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
                                 self.mark_group_unwriteable(acc["phone_number"], g_key)
                                 results_by_account[acc_id].append((group_title, False, f"Permanent: {err_str}", None))

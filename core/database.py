@@ -18,10 +18,21 @@ elif database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
+engine_kwargs = {
+    "echo": False,
+    "future": True,
+}
+if "postgresql" in database_url:
+    engine_kwargs.update({
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_recycle": 1800,
+        "pool_pre_ping": True,
+    })
+
 engine = create_async_engine(
     database_url,
-    echo=False,
-    future=True
+    **engine_kwargs
 )
 
 async_session_factory = async_sessionmaker(
@@ -46,8 +57,7 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Safe schema migration for new columns on existing database
-    # Each ALTER TABLE runs in its own transaction so an existing column error does not abort subsequent migrations in PostgreSQL.
+    # Safe schema migration for new columns and indexes on existing database
     from sqlalchemy import text
     migrations = [
         "ALTER TABLE users ADD COLUMN referrer_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
@@ -55,6 +65,11 @@ async def init_db():
         "ALTER TABLE users ADD COLUMN referral_balance FLOAT DEFAULT 0.0",
         "ALTER TABLE users ADD COLUMN total_withdrawn FLOAT DEFAULT 0.0",
         "ALTER TABLE telegram_accounts ADD COLUMN current_msg_index INTEGER DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS ix_job_logs_sent_at ON job_logs (sent_at)",
+        "CREATE INDEX IF NOT EXISTS ix_job_logs_status ON job_logs (status)",
+        "CREATE INDEX IF NOT EXISTS ix_job_logs_account_id ON job_logs (account_id)",
+        "CREATE INDEX IF NOT EXISTS ix_schedules_user_id ON schedules (user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_telegram_accounts_user_id ON telegram_accounts (user_id)",
     ]
     for m in migrations:
         try:

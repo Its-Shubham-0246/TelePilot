@@ -298,10 +298,14 @@ async def list_user_accounts(message: types.Message):
             )
             return
 
-        import asyncio
-        group_counts = await asyncio.gather(*[
-            mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number) for acc in accounts
-        ])
+        group_counts = []
+        for acc in accounts:
+            cached = mtproto_service.get_cached_group_count(acc.phone_number)
+            if cached is not None:
+                group_counts.append(cached)
+            else:
+                cnt = await mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number)
+                group_counts.append(cnt)
         total_groups = sum(group_counts)
 
         await message.answer(

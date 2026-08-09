@@ -435,9 +435,14 @@ async def admin_list_accounts(message: types.Message):
             await message.answer("📲 No active Telegram accounts connected.")
             return
 
-        group_counts = await asyncio.gather(*[
-            mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number) for acc, _ in accounts_data
-        ])
+        group_counts = []
+        for acc, _ in accounts_data:
+            cached = mtproto_service.get_cached_group_count(acc.phone_number)
+            if cached is not None:
+                group_counts.append(cached)
+            else:
+                cnt = await mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number)
+                group_counts.append(cnt)
         total_groups = sum(group_counts)
 
         header = f"<b>📱 Connected Active Telegram Accounts ({len(accounts_data)}) | Total Groups: {total_groups}</b>\n"

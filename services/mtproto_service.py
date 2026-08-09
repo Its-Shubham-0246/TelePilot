@@ -63,36 +63,47 @@ def _is_paid_group_error(err_str: str) -> bool:
     return any(kw in upper for kw in _PAID_GROUP_KEYWORDS)
 
 
-def _is_unwritable_or_banned_error(exc: Exception) -> bool:
+def _is_general_read_only_error(exc: Exception) -> bool:
+    """General read-only / admin-only / topic-closed groups where accounts SHOULD NOT auto-leave."""
+    if isinstance(exc, (ChatWriteForbiddenError, ChatAdminRequiredError)):
+        return True
+    err_str = str(exc).upper()
+    read_only_kws = (
+        'CHAT_WRITE_FORBIDDEN',
+        'CHAT_ADMIN_REQUIRED',
+        'TOPIC_CLOSED',
+        'READ_ONLY',
+        'PLAIN_FORBIDDEN',
+        'CHAT_SEND_PLAIN_FORBIDDEN',
+        'RIGHTS_NOT_ENOUGH',
+        'ADMIN_REQUIRED',
+    )
+    return any(kw in err_str for kw in read_only_kws)
+
+
+def _is_account_banned_or_muted_error(exc: Exception) -> bool:
+    """Errors specifically indicating the account was individually banned, muted, or kicked."""
     if isinstance(exc, (
         UserBannedInChannelError,
         UserNotParticipantError,
         PeerIdInvalidError,
-        ChatWriteForbiddenError,
-        ChatAdminRequiredError,
         ChannelPrivateError,
         ChatRestrictedError,
     )):
         return True
 
     err_str = str(exc).upper()
-    unwritable_kws = (
-        'CHAT_WRITE_FORBIDDEN',
-        'CHAT_RESTRICTED',
+    banned_muted_kws = (
         'USER_BANNED_IN_CHANNEL',
-        'CHAT_ADMIN_REQUIRED',
+        'CHAT_RESTRICTED',
+        'RESTRICTED AND CANNOT BE USED',
+        'USER_IS_BLOCKED',
         'CHANNEL_PRIVATE',
+        'CHATS_ALL_MUTED',
         'MUTED',
         'BANNED',
-        'READ_ONLY',
-        'TOPIC_CLOSED',
-        'PLAIN_FORBIDDEN',
-        'CHAT_SEND_PLAIN_FORBIDDEN',
-        'CHATS_ALL_MUTED',
-        'RIGHTS_NOT_ENOUGH',
-        'ADMIN_REQUIRED',
     )
-    return any(kw in err_str for kw in unwritable_kws)
+    return any(kw in err_str for kw in banned_muted_kws)
 
 
 from config import settings
@@ -496,15 +507,22 @@ class MTProtoService:
                                 consecutive_skips += 1
                                 break
 
-                            if _is_unwritable_or_banned_error(e):
-                                logger.warning(f"[Broadcast] Non-writable/banned/muted group '{group_title}' for {phone_number}: {e}")
+                            if _is_general_read_only_error(e):
+                                logger.info(f"[Broadcast] Read-only group '{group_title}' for {phone_number} (Skipped, kept in group): {e}")
+                                results.append((group_title, False, f"Read-Only Group (Skipped): {e}", None))
+                                sent = True
+                                consecutive_skips += 1
+                                break
+
+                            if _is_account_banned_or_muted_error(e):
+                                logger.warning(f"[Broadcast] Account {phone_number} banned/muted in '{group_title}': {e}. Auto-leaving...")
                                 try:
                                     await client.delete_dialog(group_entity)
-                                    logger.info(f"[AutoLeave] Account {phone_number} automatically left non-writable group '{group_title}'")
+                                    logger.info(f"[AutoLeave] Account {phone_number} automatically left banned/muted group '{group_title}'")
                                 except Exception as leave_err:
                                     logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
 
-                                results.append((group_title, False, f"Auto-Left (Unwritable): {e}", None))
+                                results.append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
                                 sent = True
                                 consecutive_skips += 1
                                 break
@@ -705,30 +723,24 @@ class MTProtoService:
                                 consecutive_failures[acc_id] += 1
                                 break
 
-                            if _is_unwritable_or_banned_error(e):
-                                logger.warning(f"[BroadcastStacked] Non-writable/banned/muted group '{group_title}' for {acc['phone_number']}: {e}")
+                            if _is_general_read_only_error(e):
+                                self.mark_group_unwriteable(acc["phone_number"], g_key)
+                                logger.info(f"[BroadcastStacked] Read-only group '{group_title}' for {acc['phone_number']} (Skipped, kept in group): {e}")
+                                results_by_account[acc_id].append((group_title, False, f"Read-Only Group (Skipped): {e}", None))
+                                sent = True
+                                consecutive_failures[acc_id] += 1
+                                break
+
+                            if _is_account_banned_or_muted_error(e):
+                                logger.warning(f"[BroadcastStacked] Account {acc['phone_number']} banned/muted in '{group_title}': {e}. Auto-leaving...")
                                 self.mark_group_unwriteable(acc["phone_number"], g_key)
                                 try:
                                     await client.delete_dialog(group_entity)
-                                    logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left non-writable group '{group_title}'")
+                                    logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left banned/muted group '{group_title}'")
                                 except Exception as leave_err:
                                     logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
 
-                                # If it's a channel-wide read-only / forbidden restriction, attempt auto-leave across all active account clients in this group
-                                if isinstance(e, (ChatWriteForbiddenError, ChatAdminRequiredError)) or any(kw in err_str.upper() for kw in ('CHAT_WRITE_FORBIDDEN', 'CHAT_ADMIN_REQUIRED', 'TOPIC_CLOSED', 'READ_ONLY')):
-                                    for other_acc in active_accounts:
-                                        other_id = other_acc["id"]
-                                        if other_id != acc_id and other_id in clients:
-                                            other_g_map = account_groups.get(other_id, {})
-                                            if g_key in other_g_map:
-                                                other_entity, _ = other_g_map[g_key]
-                                                try:
-                                                    await clients[other_id].delete_dialog(other_entity)
-                                                    logger.info(f"[AutoLeave] Account {other_acc['phone_number']} also automatically left read-only group '{group_title}'")
-                                                except Exception:
-                                                    pass
-
-                                results_by_account[acc_id].append((group_title, False, f"Auto-Left: {e}", None))
+                                results_by_account[acc_id].append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
                                 sent = True
                                 consecutive_failures[acc_id] += 1
                                 break

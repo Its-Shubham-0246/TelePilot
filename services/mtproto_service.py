@@ -92,6 +92,27 @@ class MTProtoService:
         self._account_locks: dict = {}
         self._slowmode_cache: dict = {}      # (phone_number, group_key) -> expire_datetime_utc
         self._unwriteable_cache: set = set() # (phone_number, group_key)
+        self._group_count_cache: dict = {}   # clean_phone -> (count, datetime)
+
+    def _update_group_count_cache(self, phone_number: Optional[str], count: int):
+        if not phone_number:
+            return
+        clean = "".join(c for c in str(phone_number) if c.isdigit())
+        if clean:
+            self._group_count_cache[clean] = (count, datetime.utcnow())
+
+    def get_cached_group_count(self, phone_number: Optional[str]) -> Optional[int]:
+        if not phone_number:
+            return None
+        clean = "".join(c for c in str(phone_number) if c.isdigit())
+        if not clean:
+            return None
+        if clean in self._group_count_cache:
+            return self._group_count_cache[clean][0]
+        for cached_phone, (count, _) in self._group_count_cache.items():
+            if clean in cached_phone or cached_phone in clean:
+                return count
+        return None
 
     def is_group_slowmode_active(self, phone_number: str, group_key: str) -> bool:
         cache_key = (phone_number, str(group_key))
@@ -357,8 +378,10 @@ class MTProtoService:
 
                 groups = []
                 async for dialog in client.iter_dialogs():
-                    if dialog.is_group:
+                    if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
                         groups.append((dialog.entity, dialog.name or str(dialog.id)))
+
+                self._update_group_count_cache(phone_number, len(groups))
 
                 if not groups:
                     logger.info("No joined groups found for session.")
@@ -503,9 +526,10 @@ class MTProtoService:
 
                     groups = {}
                     async for dialog in client.iter_dialogs():
-                        if dialog.is_group:
+                        if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
                             group_key = str(getattr(dialog.entity, 'id', dialog.id))
                             groups[group_key] = (dialog.entity, dialog.name or str(dialog.id))
+                    self._update_group_count_cache(acc["phone_number"], len(groups))
                     return acc["id"], client, groups, None
                 except (UserDeactivatedError, AuthKeyInvalidError):
                     return acc["id"], client, None, "SESSION_REVOKED"
@@ -672,8 +696,9 @@ class MTProtoService:
             if not await client.is_user_authorized():
                 return []
             async for dialog in client.iter_dialogs():
-                if dialog.is_group:
+                if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
                     groups.append((dialog.entity, dialog.name or str(dialog.id)))
+            self._update_group_count_cache(phone_number, len(groups))
             return groups
         except Exception as e:
             logger.error(f"Error fetching dialogs for {phone_number}: {e}")
@@ -684,22 +709,32 @@ class MTProtoService:
             except Exception:
                 pass
 
-    async def get_joined_group_count(self, session_str: str, phone_number: Optional[str] = None, timeout: float = 1.5) -> int:
+    async def get_joined_group_count(self, session_str: str, phone_number: Optional[str] = None, timeout: float = 10.0) -> int:
         """
         Fetches joined group count for an account session with non-blocking lock and timeout safety.
+        Uses in-memory cache fallback to prevent reporting 0 groups during locks or network delays.
         """
         if not session_str:
             return 0
+
+        cached = self.get_cached_group_count(phone_number)
+        lock = self.get_account_lock(phone_number)
+
+        if lock.locked():
+            return cached if cached is not None else 0
+
         try:
-            lock = self.get_account_lock(phone_number)
-            if lock.locked():
-                return 0
             async with lock:
-                groups = await asyncio.wait_for(self.fetch_joined_groups(session_str, phone_number=phone_number), timeout=timeout)
-                return len(groups)
+                groups = await asyncio.wait_for(
+                    self.fetch_joined_groups(session_str, phone_number=phone_number),
+                    timeout=timeout
+                )
+                count = len(groups)
+                self._update_group_count_cache(phone_number, count)
+                return count
         except Exception as e:
             logger.warning(f"Error fetching joined group count for {phone_number}: {e}")
-            return 0
+            return cached if cached is not None else 0
 
 
     async def send_message_to_target(

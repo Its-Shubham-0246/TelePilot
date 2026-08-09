@@ -409,7 +409,7 @@ async def admin_test_group_alert(message: types.Message):
         )
 
 
-@router.message(Command("accounts"))
+@router.message(Command("accounts", "adminaccounts", "allaccounts"))
 async def admin_list_accounts(message: types.Message):
     """Admin: list all ACTIVE connected Telegram accounts across all users."""
     if not await is_admin_user(message.from_user.id):

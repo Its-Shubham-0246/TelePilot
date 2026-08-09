@@ -1,5 +1,6 @@
 import logging
 from aiogram import Router, F, types
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select, func
@@ -34,7 +35,6 @@ async def cancel_to_main(message: types.Message, state: FSMContext):
         await mtproto_service.cancel_pending_login(phone)
     await state.clear()
     await message.answer("🏠 Returned to main menu.", reply_markup=get_main_menu_keyboard())
-
 
 
 # ── Add Account ──────────────────────────────────────────────────────────────
@@ -218,9 +218,6 @@ async def _auto_resend_code(message: types.Message, state: FSMContext, phone: st
         await state.clear()
 
 
-
-
-
 @router.message(AddAccountStates.waiting_for_2fa)
 async def process_2fa(message: types.Message, state: FSMContext):
     if message.text.strip() == "🔙 Back to Main Menu":
@@ -278,8 +275,8 @@ async def save_account_session(telegram_id: int, phone: str, session_str: str):
         await db.commit()
 
 
-
 # ── My Accounts ───────────────────────────────────────────────────────────────
+@router.message(Command("account", "myaccounts"))
 @router.message(F.text == "👤 My Accounts")
 async def list_user_accounts(message: types.Message):
     import html

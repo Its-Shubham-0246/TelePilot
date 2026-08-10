@@ -18,6 +18,7 @@ class TelegramAccount(Base):
     session_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     auto_group_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    auto_join_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     # Custom message & timer per account
     custom_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

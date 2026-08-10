@@ -129,6 +129,10 @@ async def admin_panel(message: types.Message):
             f"• <code>/testgroupalert</code> — Test sending alert to private group\n"
             f"• <code>/cleargroupalerts</code> — Reset group alert memory\n"
             f"• <code>/broadcast &lt;message&gt;</code> — Send message to all users\n"
+            f"• <code>/autojoin [phone] [on/off]</code> — Toggle auto-join mode per account\n"
+            f"• <code>/autojoingroups &lt;phone&gt;</code> — Auto-join specific account to all detected groups\n"
+            f"• <code>/scanandjoin</code> — Scan groups across ALL accounts & auto-join ALL enabled accounts\n"
+            f"• <code>/autojoinstatus</code> — View auto-join status & group counts\n"
             f"• <code>/ban &lt;telegram_id&gt;</code> — Ban user\n"
             f"• <code>/unban &lt;telegram_id&gt;</code> — Unban user\n"
             f"• <code>/mysub</code> — Check your own subscription status\n"
@@ -1214,3 +1218,166 @@ async def admin_set_commission(message: types.Message):
     except Exception as e:
         logger.error(f"Error in /setcommission: {e}", exc_info=True)
         await message.answer(f"❌ Error setting commission: {html.escape(str(e))}")
+
+
+@router.message(Command("autojoin"))
+async def admin_toggle_autojoin(message: types.Message):
+    """Admin: enable/disable auto-join mode on any account or list auto-join statuses."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    from models.account import TelegramAccount
+
+    if len(args) == 1:
+        async with async_session_factory() as db:
+            all_accs = (await db.execute(select(TelegramAccount).order_by(TelegramAccount.id.asc()))).scalars().all()
+
+        if not all_accs:
+            await message.answer("🟢 <b>No Telegram accounts connected.</b>")
+            return
+
+        header = f"<b>🔄 Account Auto-Join Statuses ({len(all_accs)} Total):</b>\n"
+        items = []
+        for acc in all_accs:
+            status_icon = "🟢 AUTO-JOIN ON" if acc.auto_join_enabled else "🔴 AUTO-JOIN OFF"
+            items.append(
+                f"• <code>{html.escape(acc.phone_number)}</code> — <b>{status_icon}</b>\n"
+                f"  └ Toggle: <code>/autojoin {acc.phone_number} toggle</code> | Join Groups: <code>/autojoingroups {acc.phone_number}</code>"
+            )
+        await send_chunked_message(message, header, items)
+        return
+
+    target_input = args[1].strip()
+    action = args[2].strip().lower() if len(args) >= 3 else "toggle"
+
+    clean_target = "".join(c for c in target_input if c.isdigit())
+    if not clean_target:
+        await message.answer("❌ Invalid account phone number.")
+        return
+
+    try:
+        async with async_session_factory() as db:
+            all_accs = (await db.execute(select(TelegramAccount))).scalars().all()
+            acc = None
+            for a in all_accs:
+                acc_digits = "".join(c for c in a.phone_number if c.isdigit())
+                if acc_digits and (clean_target in acc_digits or acc_digits in clean_target):
+                    acc = a
+                    break
+
+            if not acc:
+                await message.answer(f"❌ Account '<code>{html.escape(target_input)}</code>' not found.")
+                return
+
+            if action in ("on", "enable", "true", "1"):
+                acc.auto_join_enabled = True
+            elif action in ("off", "disable", "false", "0"):
+                acc.auto_join_enabled = False
+            else:
+                acc.auto_join_enabled = not acc.auto_join_enabled
+
+            new_status = acc.auto_join_enabled
+            await db.commit()
+
+        status_text = "🟢 <b>ENABLED (ON)</b>" if new_status else "🔴 <b>DISABLED (OFF)</b>"
+        await message.answer(
+            f"✅ <b>Auto-Join Setting Updated!</b>\n\n"
+            f"• <b>Account:</b> <code>{html.escape(acc.phone_number)}</code>\n"
+            f"• <b>Auto-Join Groups:</b> {status_text}\n\n"
+            f"💡 <i>Run <code>/autojoingroups {acc.phone_number}</code> to trigger immediate group joining, or <code>/scanandjoin</code> for all enabled accounts!</i>"
+        )
+    except Exception as e:
+        logger.error(f"Error in /autojoin: {e}", exc_info=True)
+        await message.answer(f"❌ Error updating auto-join setting: {html.escape(str(e))}")
+
+
+@router.message(Command("autojoingroups"))
+async def admin_auto_join_groups(message: types.Message):
+    """Admin: scan all groups across all added accounts and auto-join specified target account into all writable groups."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "⚠️ <b>Usage:</b> <code>/autojoingroups &lt;phone_number&gt;</code>\n\n"
+            "Example: <code>/autojoingroups +919876543210</code>"
+        )
+        return
+
+    target_phone = args[1].strip()
+    status_msg = await message.answer(f"🔄 Scanning all groups across ALL added accounts & auto-joining <code>{html.escape(target_phone)}</code>...")
+
+    try:
+        from services.group_discovery_service import auto_join_single_account_to_all_groups
+        report = await auto_join_single_account_to_all_groups(target_phone)
+        await status_msg.edit_text(report, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in /autojoingroups: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error during auto-join sync: {html.escape(str(e))}", parse_mode="HTML")
+
+
+@router.message(Command("scanandjoin", "autojoinscan", "joinallaccounts"))
+async def admin_scan_and_join_all(message: types.Message):
+    """Admin: scan all groups across all added accounts, and auto-join ALL accounts that have auto_join_enabled == True into all writable groups."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    status_msg = await message.answer("🌐 Scanning all groups across ALL added accounts & auto-joining ALL auto-join enabled accounts...")
+
+    try:
+        from services.group_discovery_service import auto_join_all_enabled_accounts_to_all_groups
+        report = await auto_join_all_enabled_accounts_to_all_groups()
+        await status_msg.edit_text(report, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in /scanandjoin: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error during global scan & join: {html.escape(str(e))}", parse_mode="HTML")
+
+
+@router.message(Command("autojoinstatus"))
+async def admin_autojoin_status(message: types.Message):
+    """Admin: view overview of auto-join enabled accounts and system group counts."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    try:
+        from models.account import TelegramAccount
+        from models.discovered_group import DiscoveredGroup
+
+        async with async_session_factory() as db:
+            all_accs = (await db.execute(select(TelegramAccount))).scalars().all()
+            enabled_accs = [a for a in all_accs if a.auto_join_enabled]
+
+            total_groups = (await db.execute(select(func.count(DiscoveredGroup.id)))).scalar() or 0
+            writable_groups = (await db.execute(
+                select(func.count(DiscoveredGroup.id)).where(DiscoveredGroup.can_send_msgs == True)
+            )).scalar() or 0
+
+        acc_lines = []
+        for a in all_accs:
+            st = "🟢 ON" if a.auto_join_enabled else "🔴 OFF"
+            acc_lines.append(f"• <code>{html.escape(a.phone_number)}</code> — <b>{st}</b>")
+
+        acc_summary = "\n".join(acc_lines) if acc_lines else "<i>No connected accounts.</i>"
+
+        text = (
+            f"📊 <b>Auto-Join Feature Status Summary:</b>\n\n"
+            f"• <b>Total Connected Accounts:</b> {len(all_accs)}\n"
+            f"• <b>Auto-Join Enabled Accounts:</b> {len(enabled_accs)}\n"
+            f"• <b>Total Discovered System Groups:</b> {total_groups}\n"
+            f"• <b>Writable Groups (Messaging Allowed):</b> {writable_groups}\n\n"
+            f"<b>Accounts Overview:</b>\n{acc_summary}\n\n"
+            f"<b>Quick Actions:</b>\n"
+            f"• <code>/scanandjoin</code> — Auto-join all enabled accounts\n"
+            f"• <code>/autojoin &lt;phone&gt; on</code> — Enable auto-join for account"
+        )
+        await message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in /autojoinstatus: {e}", exc_info=True)
+        await message.answer(f"❌ Error fetching auto-join status: {html.escape(str(e))}")
+

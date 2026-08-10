@@ -7,6 +7,8 @@ from typing import Tuple, Optional, List
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.account import GetAuthorizationsRequest, ResetAuthorizationRequest
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest, ExportChatInviteRequest
 from telethon.errors import (
     FloodWaitError,
     SlowModeWaitError,
@@ -24,6 +26,10 @@ from telethon.errors import (
     PeerIdInvalidError,
     ChatRestrictedError,
     FreshResetAuthorisationForbiddenError,
+    UserAlreadyParticipantError,
+    ChannelsTooMuchError,
+    InviteHashExpiredError,
+    InviteHashInvalidError,
 )
 
 # Paid group keywords — accounts MUST NOT leave paid/star subscription groups automatically!
@@ -930,6 +936,108 @@ class MTProtoService:
 
             finally:
                 await client.disconnect()
+
+    def check_group_write_permission(self, entity) -> bool:
+        """Returns True if messages can be sent to group_entity."""
+        if not entity:
+            return False
+        if getattr(entity, 'broadcast', False):
+            return False
+        default_banned = getattr(entity, 'default_banned_rights', None)
+        if default_banned and getattr(default_banned, 'send_messages', False):
+            return False
+        if getattr(entity, 'restricted', False):
+            return False
+        return True
+
+    async def join_chat_or_channel(
+        self, session_str: str, target: str, phone_number: Optional[str] = None
+    ) -> Tuple[bool, str, Optional[int]]:
+        """
+        Attempts to join a group or channel using username (@username or username) or invite link (t.me/+hash or t.me/joinchat/hash).
+        Returns (success, message, flood_wait_seconds).
+        """
+        if not session_str or not target:
+            return False, "Target or session is empty", None
+
+        session = StringSession(session_str)
+        client = self._create_client(session, phone_number)
+        clean_target = str(target).strip()
+
+        async with self.get_account_lock(phone_number):
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    return False, "Session expired or user unauthorized.", None
+
+                if "t.me/+" in clean_target or "joinchat/" in clean_target:
+                    hash_part = clean_target.split("+")[-1] if "t.me/+" in clean_target else clean_target.split("joinchat/")[-1]
+                    hash_part = hash_part.split("?")[0].strip()
+                    await client(ImportChatInviteRequest(hash=hash_part))
+                elif clean_target.startswith("http://") or clean_target.startswith("https://"):
+                    username = clean_target.split("/")[-1].lstrip("@")
+                    await client(JoinChannelRequest(username))
+                else:
+                    username = clean_target.lstrip("@")
+                    await client(JoinChannelRequest(username))
+
+                return True, f"Successfully joined {target}", None
+
+            except UserAlreadyParticipantError:
+                return True, f"Already participant of {target}", None
+            except FloodWaitError as e:
+                logger.warning(f"FloodWait joining {target} for {phone_number}: {e.seconds}s")
+                return False, f"FloodWait: retry in {e.seconds}s", e.seconds
+            except ChannelsTooMuchError:
+                return False, "Account reached max 500 groups limit on Telegram", None
+            except (InviteHashExpiredError, InviteHashInvalidError) as e:
+                return False, f"Invalid or expired invite link: {e}", None
+            except Exception as e:
+                err_txt = str(e)
+                if "ALREADY_PARTICIPANT" in err_txt.upper():
+                    return True, f"Already participant of {target}", None
+                logger.error(f"Error joining {target} for {phone_number}: {e}")
+                return False, f"Failed to join: {err_txt}", None
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
+    async def export_group_join_info(
+        self, session_str: str, group_entity: any, phone_number: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Returns (username, invite_link) for a group entity using account's session.
+        """
+        username = getattr(group_entity, 'username', None)
+        if username:
+            return username, f"https://t.me/{username}"
+
+        session = StringSession(session_str)
+        client = self._create_client(session, phone_number)
+        invite_link = None
+
+        async with self.get_account_lock(phone_number):
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    return None, None
+                try:
+                    res = await client(ExportChatInviteRequest(group_entity))
+                    if hasattr(res, 'link'):
+                        invite_link = res.link
+                except Exception as e:
+                    logger.debug(f"ExportChatInviteRequest failed for group {group_entity}: {e}")
+            except Exception:
+                pass
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
+        return username, invite_link
 
 
 mtproto_service = MTProtoService()

@@ -441,22 +441,29 @@ async def admin_list_accounts(message: types.Message):
 
         group_counts = []
         for acc, _ in accounts_data:
-            cached = mtproto_service.get_cached_group_count(acc.phone_number)
-            if cached is not None:
-                group_counts.append(cached)
-            else:
-                cnt = await mtproto_service.get_joined_group_count(acc.get_session_string(), phone_number=acc.phone_number)
-                group_counts.append(cnt)
+            try:
+                cached = mtproto_service.get_cached_group_count(acc.phone_number)
+                if cached is not None:
+                    group_counts.append(cached)
+                else:
+                    session_str = acc.get_session_string()
+                    cnt = await mtproto_service.get_joined_group_count(session_str, phone_number=acc.phone_number)
+                    group_counts.append(cnt)
+            except Exception as acc_err:
+                logger.warning(f"Error fetching group count for {acc.phone_number}: {acc_err}")
+                group_counts.append(0)
+
         total_groups = sum(group_counts)
 
         header = f"<b>📱 Connected Active Telegram Accounts ({len(accounts_data)}) | Total Groups: {total_groups}</b>\n"
         items = []
         for (acc, u), g_count in zip(accounts_data, group_counts):
             username_str = f"@{html.escape(u.username)}" if u.username else html.escape(u.full_name or "Unknown")
+            aj_status = "🟢 ON" if getattr(acc, 'auto_join_enabled', False) else "🔴 OFF"
             items.append(
                 f"• 🟢 <code>{html.escape(acc.phone_number)}</code>\n"
                 f"  └ <b>User:</b> {username_str} (<code>{u.telegram_id}</code>)\n"
-                f"  └ <b>Groups Added:</b> {g_count} | <b>Interval:</b> {acc.interval_minutes}m"
+                f"  └ <b>Groups:</b> {g_count} | <b>Interval:</b> {acc.interval_minutes}m | <b>Auto-Join:</b> {aj_status}"
             )
 
         await send_chunked_message(message, header, items)

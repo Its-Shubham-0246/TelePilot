@@ -65,20 +65,31 @@ async def init_db():
         "ALTER TABLE users ADD COLUMN referral_balance FLOAT DEFAULT 0.0",
         "ALTER TABLE users ADD COLUMN total_withdrawn FLOAT DEFAULT 0.0",
         "ALTER TABLE telegram_accounts ADD COLUMN current_msg_index INTEGER DEFAULT 0",
-        "ALTER TABLE telegram_accounts ADD COLUMN auto_join_enabled BOOLEAN DEFAULT 0",
+        "ALTER TABLE telegram_accounts ADD COLUMN auto_join_enabled BOOLEAN DEFAULT FALSE",
         "ALTER TABLE discovered_groups ADD COLUMN username VARCHAR(255)",
         "ALTER TABLE discovered_groups ADD COLUMN invite_link VARCHAR(500)",
-        "ALTER TABLE discovered_groups ADD COLUMN can_send_msgs BOOLEAN DEFAULT 1",
+        "ALTER TABLE discovered_groups ADD COLUMN can_send_msgs BOOLEAN DEFAULT TRUE",
         "CREATE INDEX IF NOT EXISTS ix_job_logs_sent_at ON job_logs (sent_at)",
         "CREATE INDEX IF NOT EXISTS ix_job_logs_status ON job_logs (status)",
         "CREATE INDEX IF NOT EXISTS ix_job_logs_account_id ON job_logs (account_id)",
         "CREATE INDEX IF NOT EXISTS ix_schedules_user_id ON schedules (user_id)",
         "CREATE INDEX IF NOT EXISTS ix_telegram_accounts_user_id ON telegram_accounts (user_id)",
     ]
+    import logging
+    logger = logging.getLogger(__name__)
+
     for m in migrations:
         try:
             async with engine.begin() as conn:
                 await conn.execute(text(m))
-        except Exception:
-            pass
+        except Exception as e:
+            # Try SQLite fallback if PostgreSQL syntax variant failed
+            if "DEFAULT FALSE" in m or "DEFAULT TRUE" in m:
+                try:
+                    fallback_m = m.replace("DEFAULT FALSE", "DEFAULT 0").replace("DEFAULT TRUE", "DEFAULT 1")
+                    async with engine.begin() as conn:
+                        await conn.execute(text(fallback_m))
+                except Exception:
+                    pass
+            logger.debug(f"[Migration] Statement '{m}' result: {e}")
 

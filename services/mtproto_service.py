@@ -1027,10 +1027,25 @@ class MTProtoService:
                     res = await client(ExportChatInviteRequest(group_entity))
                     if hasattr(res, 'link'):
                         invite_link = res.link
-                except Exception as e:
-                    logger.debug(f"ExportChatInviteRequest failed for group {group_entity}: {e}")
-            except Exception:
-                pass
+                except Exception:
+                    try:
+                        from telethon.tl.functions.channels import GetFullChannelRequest
+                        full = await client(GetFullChannelRequest(group_entity))
+                        exported = getattr(full.full_chat, 'exported_invite', None)
+                        if exported and hasattr(exported, 'link'):
+                            invite_link = exported.link
+                    except Exception:
+                        try:
+                            from telethon.tl.functions.messages import GetFullChatRequest
+                            g_id = getattr(group_entity, 'id', group_entity)
+                            full = await client(GetFullChatRequest(g_id))
+                            exported = getattr(full.full_chat, 'exported_invite', None)
+                            if exported and hasattr(exported, 'link'):
+                                invite_link = exported.link
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"export_group_join_info error for {phone_number}: {e}")
             finally:
                 try:
                     await client.disconnect()

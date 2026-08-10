@@ -219,28 +219,38 @@ async def scan_all_accounts_for_groups() -> dict:
                     can_write = mtproto_service.check_group_write_permission(entity)
                     username = getattr(entity, 'username', None)
 
-                    if g_id not in detected_groups:
+                    existing = (await db.execute(
+                        select(DiscoveredGroup).where(DiscoveredGroup.group_id == g_id)
+                    )).scalars().first()
+
+                    invite_link = f"https://t.me/{username}" if username else (existing.invite_link if existing else None)
+
+                    if not username and not invite_link and can_write:
+                        try:
+                            _, exported_link = await mtproto_service.export_group_join_info(session_str, entity, phone_number=acc.phone_number)
+                            if exported_link:
+                                invite_link = exported_link
+                        except Exception as exp_err:
+                            logger.debug(f"[GroupScan] Could not export invite link for '{title}': {exp_err}")
+
+                    if g_id not in detected_groups or (invite_link and not detected_groups[g_id].get("invite_link")):
                         detected_groups[g_id] = {
                             "group_id": g_id,
                             "title": title,
                             "username": username,
-                            "invite_link": f"https://t.me/{username}" if username else None,
+                            "invite_link": invite_link,
                             "can_send_msgs": can_write,
                             "discovered_by": acc.phone_number
                         }
 
                     # Sync DB record
-                    existing = (await db.execute(
-                        select(DiscoveredGroup).where(DiscoveredGroup.group_id == g_id)
-                    )).scalars().first()
-
                     if not existing:
                         dg = DiscoveredGroup(
                             group_id=g_id,
                             group_title=title,
                             discovered_by_phone=acc.phone_number,
                             username=username,
-                            invite_link=f"https://t.me/{username}" if username else None,
+                            invite_link=invite_link,
                             can_send_msgs=can_write,
                             notified=False
                         )
@@ -248,7 +258,8 @@ async def scan_all_accounts_for_groups() -> dict:
                     else:
                         if username and not existing.username:
                             existing.username = username
-                            existing.invite_link = f"https://t.me/{username}"
+                        if invite_link and not existing.invite_link:
+                            existing.invite_link = invite_link
                         existing.can_send_msgs = can_write
 
             except Exception as e:

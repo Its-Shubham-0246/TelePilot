@@ -523,6 +523,28 @@ async def admin_migrate_db(message: types.Message):
         await message.answer(f"❌ Error during database migration: {html.escape(str(e))}")
 
 
+@router.message(Command("syncaccountlimits", "synclimits"))
+async def admin_sync_account_limits(message: types.Message):
+    """Admin: Force sweep database to set max_accounts=5 on all active subscriptions and trim excess accounts."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    try:
+        from services.subscription_service import subscription_service
+        async with async_session_factory() as db:
+            await subscription_service.sweep_and_enforce_all_account_limits(db, max_limit=5)
+
+        await message.answer(
+            "✅ <b>Account Limits Synchronized!</b>\n\n"
+            "All active subscriptions database-wide have been updated to <b>max 5 accounts</b>, "
+            "and any excess accounts beyond 5 have been safely trimmed."
+        )
+    except Exception as e:
+        logger.error(f"Error in /syncaccountlimits: {e}", exc_info=True)
+        await message.answer(f"❌ Error syncing account limits: {html.escape(str(e))}")
+
+
 @router.message(Command("cleargroupalerts"))
 async def admin_clear_group_alerts(message: types.Message):
     """Admin: clear discovered_groups memory so missing group alerts trigger again on next broadcast."""

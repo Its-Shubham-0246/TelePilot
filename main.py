@@ -100,15 +100,15 @@ async def background_startup():
     except Exception as lock_err:
         logger.warning(f"Leader lock claim warning: {lock_err}")
 
-    # Enforce 5 accounts max limit for all active lifetime subscriptions
+    # Enforce 5 accounts max limit for ALL active subscriptions
     try:
         from core.database import async_session_factory
         from services.subscription_service import subscription_service
         async with async_session_factory() as db:
-            await subscription_service.sweep_and_enforce_lifetime_limits(db)
-        logger.info("Enforced 5 accounts max limit for all Lifetime subscriptions.")
+            await subscription_service.sweep_and_enforce_all_account_limits(db, max_limit=5)
+        logger.info("Enforced 5 accounts max limit for ALL active subscriptions.")
     except Exception as sweep_err:
-        logger.warning(f"Lifetime accounts sweep warning: {sweep_err}")
+        logger.warning(f"Account limits sweep warning: {sweep_err}")
 
     # Start APScheduler background engine
     scheduler_service.start()

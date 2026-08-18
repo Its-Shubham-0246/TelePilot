@@ -74,6 +74,7 @@ class SubscriptionService:
             new_expires = active_sub.expires_at + timedelta(days=days)
             active_sub.expires_at = new_expires
             active_sub.plan_name = plan_info["name"]
+            active_sub.max_accounts = 5
             if payment_id:
                 active_sub.payment_id = payment_id
             await db.commit()
@@ -116,17 +117,21 @@ class SubscriptionService:
         await db.commit()
         return terminated_phones
 
-    async def sweep_and_enforce_lifetime_limits(self, db: AsyncSession):
-        """Finds all active lifetime subscriptions, sets max_accounts=5, and terminates excess accounts."""
+    async def sweep_and_enforce_all_account_limits(self, db: AsyncSession, max_limit: int = 5):
+        """Finds all active subscriptions where max_accounts > max_limit, sets max_accounts=5, and terminates excess accounts."""
         stmt = select(Subscription).where(
             Subscription.status == "ACTIVE",
-            Subscription.plan_name.ilike("%Lifetime%")
+            Subscription.max_accounts > max_limit
         )
         subs = (await db.execute(stmt)).scalars().all()
         for sub in subs:
-            sub.max_accounts = 5
-            await self.enforce_user_account_limit(db, sub.user_id, max_limit=5)
+            sub.max_accounts = max_limit
+            await self.enforce_user_account_limit(db, sub.user_id, max_limit=max_limit)
         await db.commit()
+
+    async def sweep_and_enforce_lifetime_limits(self, db: AsyncSession):
+        """Backward compatible wrapper for sweep_and_enforce_all_account_limits."""
+        await self.sweep_and_enforce_all_account_limits(db, max_limit=5)
 
     async def purge_unsubscribed_users(self, db: AsyncSession, grace_days: int = 2) -> int:
         """

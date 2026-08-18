@@ -15,7 +15,7 @@ class Subscription(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     plan_name: Mapped[str] = mapped_column(String(50), nullable=False)  # 30 Days, 90 Days, 180 Days, 365 Days
-    max_accounts: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    max_accounts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="ACTIVE", nullable=False)  # ACTIVE, EXPIRED, CANCELLED
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

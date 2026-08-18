@@ -85,7 +85,7 @@ class SubscriptionService:
             new_sub = Subscription(
                 user_id=user_id,
                 plan_name=plan_info["name"],
-                max_accounts=15,
+                max_accounts=5,
                 status="ACTIVE",
                 expires_at=expires_at,
                 payment_id=payment_id

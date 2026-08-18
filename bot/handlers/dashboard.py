@@ -27,7 +27,7 @@ async def show_dashboard(message: types.Message):
 
         # 1. Subscription Info
         sub = await subscription_service.get_active_subscription(db, user.id)
-        max_allowed = sub.max_accounts if sub else 15
+        max_allowed = sub.max_accounts if sub else 5
         if sub:
             sub_status = f"🟢 Active ({sub.plan_name})"
             days_left = (sub.expires_at - datetime.utcnow()).days

@@ -8,7 +8,7 @@ A subscription-based Telegram automation SaaS platform powered by **Telethon** (
 
 - **Interactive Bot Interface**: Complete bot menu navigation (`🏠 Dashboard`, `➕ Add Account`, `👤 My Accounts`, `💬 Messages`, `⏰ Scheduler`, `▶️ Start`, `⏸ Pause`, `⏹ Stop`, `📊 Status`, `💳 Subscription`, `⚙️ Settings`, `🆘 Support`).
 - **Secure MTProto Multi-Account Sign-in**:
-  - Max 15 connected accounts per user.
+  - Max 5 connected accounts per user.
   - Interactive FSM sign-in (Phone -> OTP Code -> 2FA Password).
   - **AES-256 Fernet Encryption** for stored StringSession tokens at rest.
   - Zero OTP retention (handled exclusively in transient memory).

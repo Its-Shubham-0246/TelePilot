@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     ALERT_GROUP_CHAT_ID: str = ""
     
     # App Settings
-    MAX_ACCOUNTS_PER_USER: int = 15
+    MAX_ACCOUNTS_PER_USER: int = 5
     MAX_CONCURRENT_BROADCASTS: int = 20
     HOST: str = "0.0.0.0"
     PORT: int = 8000

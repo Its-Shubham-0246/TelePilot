@@ -139,7 +139,7 @@ def create_commands_pdf(filename="TelePilot_Bot_All_Commands_CheatSheet.pdf"):
         [Paragraph("Menu Button", cell_bold), Paragraph("Description & Action", cell_bold), Paragraph("Key Features / Rules", cell_bold)],
         [Paragraph("<code>/start</code>", cell_bold), Paragraph("Initializes user profile, displays welcome banner, pricing, and main menu.", cell_text), Paragraph("Auto-registers user in database.", cell_desc)],
         [Paragraph("<code>🏠 Dashboard</code>", cell_bold), Paragraph("Shows account overview: active plan, connected accounts, schedule state, sent today.", cell_text), Paragraph("Real-time metrics.", cell_desc)],
-        [Paragraph("<code>➕ Add Account</code>", cell_bold), Paragraph("Interactive MTProto sign-in FSM (Phone -> OTP Code -> 2FA Password).", cell_text), Paragraph("Max 15 accs (Standard) / 5 accs (Lifetime).", cell_desc)],
+        [Paragraph("<code>➕ Add Account</code>", cell_bold), Paragraph("Interactive MTProto sign-in FSM (Phone -> OTP Code -> 2FA Password).", cell_text), Paragraph("Max 5 accounts per subscriber.", cell_desc)],
         [Paragraph("<code>👤 My Accounts</code>", cell_bold), Paragraph("Lists all connected phone numbers with options to manage, toggle, or remove.", cell_text), Paragraph("Shows status (ACTIVE, FLOOD_WAIT).", cell_desc)],
         [Paragraph("<code>💬 Messages</code>", cell_bold), Paragraph("Configure custom message text, message variant rotation (---), and timer interval.", cell_text), Paragraph("Timer choices: 1 min to 5 hours.", cell_desc)],
         [Paragraph("<code>⏰ Scheduler</code>", cell_bold), Paragraph("Automation control center showing active status and group discovery strategy.", cell_text), Paragraph("Control main scheduler loop.", cell_desc)],

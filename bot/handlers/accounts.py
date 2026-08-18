@@ -49,7 +49,7 @@ async def start_add_account(message: types.Message, state: FSMContext):
 
         from services.subscription_service import subscription_service
         sub = await subscription_service.get_active_subscription(db, user.id)
-        max_allowed = sub.max_accounts if sub else 15
+        max_allowed = sub.max_accounts if sub else 5
 
         stmt_count = select(func.count(TelegramAccount.id)).where(TelegramAccount.user_id == user.id)
         count = (await db.execute(stmt_count)).scalar() or 0
@@ -288,7 +288,7 @@ async def list_user_accounts(message: types.Message):
                 return
             from services.subscription_service import subscription_service
             sub = await subscription_service.get_active_subscription(db, user.id)
-            max_allowed = sub.max_accounts if sub else 15
+            max_allowed = sub.max_accounts if sub else 5
             accounts = (await db.execute(select(TelegramAccount).where(TelegramAccount.user_id == user.id))).scalars().all()
 
         if not accounts:

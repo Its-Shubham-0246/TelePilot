@@ -119,6 +119,7 @@ async def admin_panel(message: types.Message):
             f"• <code>/subscribers</code> — List all active paid/granted users\n"
             f"• <code>/accounts</code> — List all connected Telegram phone numbers\n"
             f"• <code>/finduser &lt;query&gt;</code> — Search user by ID, username, name, or phone\n"
+            f"• <code>/grantsub &lt;user&gt; [days]</code> — Grant/verify subscription (e.g. /grantsub @laily 30)\n"
             f"• <code>/grantlifetime &lt;user&gt;</code> — Give permanent access (auto-creates if ID)\n"
             f"• <code>/revokelifetime &lt;user&gt;</code> — Revoke lifetime access / cancel plan\n"
             f"• <code>/withdrawals</code> — List pending affiliate withdrawal requests\n"
@@ -836,6 +837,83 @@ async def admin_grant_lifetime(message: types.Message):
     except Exception as e:
         logger.error(f"Error in /grantlifetime: {e}", exc_info=True)
         await message.answer(f"❌ Error granting lifetime access: {html.escape(str(e))}")
+
+
+@router.message(Command("grantsub", "grantdays", "verifypayment"))
+async def admin_grant_subscription(message: types.Message):
+    """Admin: manually verify payment and activate or extend a user's subscription for N days (default 30 days)."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "⚠️ <b>Usage:</b> <code>/grantsub &lt;telegram_id_or_username&gt; [days]</code>\n\n"
+            "Example 30 days: <code>/grantsub @laily 30</code>\n"
+            "Example by Telegram ID: <code>/grantsub 123456789 30</code>"
+        )
+        return
+
+    raw_user = args[1].strip()
+    clean_target = raw_user.lstrip("@").strip()
+    days = 30
+    if len(args) >= 3 and args[2].isdigit():
+        days = int(args[2])
+
+    try:
+        async with async_session_factory() as db:
+            user = await find_user_by_input(db, clean_target)
+
+            created_new = False
+            if not user and clean_target.isdigit():
+                user = User(
+                    telegram_id=int(clean_target),
+                    is_admin=int(clean_target) in settings.admin_ids_list
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+                created_new = True
+
+            if not user:
+                await message.answer(
+                    f"❌ User <code>{html.escape(raw_user)}</code> not found in database.\n\n"
+                    f"Ask the user to send <code>/start</code> to the bot first."
+                )
+                return
+
+            from services.subscription_service import subscription_service
+            from models.payment import Payment
+
+            # Mark any pending payment for user as VERIFIED
+            stmt_pay = select(Payment).where(Payment.user_id == user.id, Payment.status == "PENDING").order_by(Payment.id.desc())
+            pending_pay = (await db.execute(stmt_pay)).scalars().first()
+            pay_id = None
+            if pending_pay:
+                pending_pay.status = "VERIFIED"
+                pay_id = pending_pay.id
+                await db.commit()
+
+            sub = await subscription_service.add_or_renew_subscription(db, user.id, days, payment_id=pay_id)
+
+        target_id = user.telegram_id
+        username = f"@{user.username}" if user.username else (user.full_name or str(target_id))
+        safe_username = html.escape(username)
+
+        new_notice = "\n<i>(Created new user profile in DB)</i>" if created_new else ""
+        await message.answer(
+            f"✅ <b>Subscription Activated / Granted!</b>{new_notice}\n\n"
+            f"<b>User:</b> {safe_username}\n"
+            f"<b>Telegram ID:</b> <code>{target_id}</code>\n"
+            f"<b>Plan:</b> {sub.plan_name}\n"
+            f"<b>Active Until:</b> {sub.expires_at.strftime('%d %b %Y, %I:%M %p UTC')}\n\n"
+            f"<i>No automated message was sent to the user as requested.</i>"
+        )
+    except Exception as e:
+        logger.error(f"Error in /grantsub: {e}", exc_info=True)
+        await message.answer(f"❌ Error granting subscription: {html.escape(str(e))}")
+
 
 
 @router.message(Command("syncaccountlimits"))

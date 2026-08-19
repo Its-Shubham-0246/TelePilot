@@ -24,8 +24,8 @@ engine_kwargs = {
 }
 if "postgresql" in database_url:
     engine_kwargs.update({
-        "pool_size": 10,
-        "max_overflow": 20,
+        "pool_size": 30,
+        "max_overflow": 60,
         "pool_recycle": 1800,
         "pool_pre_ping": True,
     })
@@ -74,6 +74,9 @@ async def init_db():
         "CREATE INDEX IF NOT EXISTS ix_job_logs_account_id ON job_logs (account_id)",
         "CREATE INDEX IF NOT EXISTS ix_schedules_user_id ON schedules (user_id)",
         "CREATE INDEX IF NOT EXISTS ix_telegram_accounts_user_id ON telegram_accounts (user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_telegram_accounts_user_active_auto ON telegram_accounts (user_id, is_active, auto_group_enabled)",
+        "CREATE INDEX IF NOT EXISTS ix_schedules_is_active ON schedules (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_subscriptions_user_status_exp ON subscriptions (user_id, status, expires_at)",
     ]
     import logging
     logger = logging.getLogger(__name__)

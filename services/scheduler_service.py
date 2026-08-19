@@ -144,6 +144,8 @@ class SchedulerService:
 
                 purged_users = await subscription_service.purge_unsubscribed_users(db, grace_days=2)
 
+                mtproto_service.cleanup_stale_caches()
+
                 if deleted_logs > 0 or purged_users > 0:
                     logger.info(f"[DBCleanup] Purged {deleted_logs} old job log(s) (>5 days) and {purged_users} unsubscribed user(s) (>2 days without active sub).")
         except Exception as e:

@@ -210,6 +210,27 @@ class MTProtoService:
             self._account_locks[clean] = asyncio.Lock()
         return self._account_locks[clean]
 
+    def cleanup_stale_caches(self):
+        """Purges expired slowmode entries, old group count cache (>2 hours), and unlocked account locks to prevent memory leaks at 10,000+ account scale."""
+        try:
+            now = datetime.utcnow()
+            expired_slowmode = [k for k, exp in self._slowmode_cache.items() if now >= exp]
+            for k in expired_slowmode:
+                self._slowmode_cache.pop(k, None)
+
+            cutoff_2h = now - timedelta(hours=2)
+            expired_counts = [k for k, (_, ts) in self._group_count_cache.items() if ts < cutoff_2h]
+            for k in expired_counts:
+                self._group_count_cache.pop(k, None)
+
+            unlocked_phones = [phone for phone, lock in self._account_locks.items() if not lock.locked()]
+            for phone in unlocked_phones:
+                self._account_locks.pop(phone, None)
+
+            logger.debug(f"[MTProtoService] Memory cleanup: purged {len(expired_slowmode)} slowmode(s), {len(expired_counts)} group count(s), {len(unlocked_phones)} lock(s).")
+        except Exception as e:
+            logger.warning(f"[MTProtoService] Error cleaning stale caches: {e}")
+
     def _create_client(self, session: StringSession, phone_number: Optional[str] = None) -> TelegramClient:
         """Creates TelegramClient with varied, authentic device headers to prevent account fingerprint clustering."""
         device = _get_device_fingerprint(phone_number)

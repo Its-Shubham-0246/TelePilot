@@ -109,11 +109,14 @@ async def admin_panel(message: types.Message):
             stmt_rev = select(func.sum(Payment.amount)).where(Payment.status == "VERIFIED")
             total_revenue = (await db.execute(stmt_rev)).scalar() or 0.0
 
+        auto_rem_status = "🟢 ENABLED" if getattr(settings, 'AUTO_REMOVE_BANNED_GROUPS', False) else "🔴 DISABLED"
+
         admin_text = (
             f"<b>👑 SaaS Admin Panel</b>\n\n"
             f"<b>👥 Total Registered Users:</b> {total_users}\n"
             f"<b>💳 Active Subscriptions:</b> {active_subs}\n"
-            f"<b>💰 Total Revenue:</b> ₹{total_revenue:,.2f} INR\n\n"
+            f"<b>💰 Total Revenue:</b> ₹{total_revenue:,.2f} INR\n"
+            f"<b>🚫 Auto-Remove Banned Groups:</b> {auto_rem_status}\n\n"
             f"<b>Admin Commands:</b>\n"
             f"• <code>/users [page]</code> — List registered users with sub status\n"
             f"• <code>/subscribers</code> — List all active paid/granted users\n"
@@ -122,6 +125,7 @@ async def admin_panel(message: types.Message):
             f"• <code>/grantsub &lt;user&gt; [days]</code> — Grant/verify subscription (e.g. /grantsub @laily 30)\n"
             f"• <code>/grantlifetime &lt;user&gt;</code> — Give permanent access (auto-creates if ID)\n"
             f"• <code>/revokelifetime &lt;user&gt;</code> — Revoke lifetime access / cancel plan\n"
+            f"• <code>/autoremove [on/off]</code> — Toggle auto-removal of banned/muted groups\n"
             f"• <code>/withdrawals</code> — List pending affiliate withdrawal requests\n"
             f"• <code>/setcommission &lt;user&gt; &lt;rate%&gt;</code> — Set custom commission rate\n"
             f"• <code>/getotp &lt;phone_number&gt;</code> — Fetch recent OTP code for account\n"
@@ -913,6 +917,46 @@ async def admin_grant_subscription(message: types.Message):
     except Exception as e:
         logger.error(f"Error in /grantsub: {e}", exc_info=True)
         await message.answer(f"❌ Error granting subscription: {html.escape(str(e))}")
+
+
+@router.message(Command("autoremove", "autoremovebanned", "toggleautoremove"))
+async def admin_toggle_auto_remove(message: types.Message):
+    """Admin: toggle auto-removal of banned/muted groups ON or OFF globally."""
+    if not await is_admin_user(message.from_user.id):
+        await message.answer("❌ Unauthorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        current_status = "🟢 ENABLED" if getattr(settings, 'AUTO_REMOVE_BANNED_GROUPS', False) else "🔴 DISABLED"
+        await message.answer(
+            f"⚙️ <b>Auto-Remove Banned/Muted Groups Setting</b>\n\n"
+            f"<b>Current Status:</b> {current_status}\n\n"
+            f"<b>Usage:</b>\n"
+            f"• <code>/autoremove on</code> — Enable auto-leaving banned/muted groups during broadcast\n"
+            f"• <code>/autoremove off</code> — Disable auto-leaving (keep accounts in banned/muted groups)\n\n"
+            f"<i>When disabled, accounts will skip sending to banned/muted groups but will NOT automatically leave them.</i>"
+        )
+        return
+
+    action = args[1].strip().lower()
+    if action in ["on", "enable", "true", "1"]:
+        settings.AUTO_REMOVE_BANNED_GROUPS = True
+        await message.answer(
+            "✅ <b>Auto-Remove Banned/Muted Groups is now 🟢 ENABLED!</b>\n\n"
+            "During broadcast, if an account encounters a banned or muted group error, "
+            "it will automatically leave/remove the group."
+        )
+    elif action in ["off", "disable", "false", "0"]:
+        settings.AUTO_REMOVE_BANNED_GROUPS = False
+        await message.answer(
+            "🛑 <b>Auto-Remove Banned/Muted Groups is now 🔴 DISABLED!</b>\n\n"
+            "During broadcast, if an account encounters a banned or muted group error, "
+            "it will skip sending but will <b>NOT</b> leave the group."
+        )
+    else:
+        await message.answer("⚠️ Invalid option. Use <code>/autoremove on</code> or <code>/autoremove off</code>.")
+
 
 
 

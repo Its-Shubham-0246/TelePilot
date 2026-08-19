@@ -521,14 +521,18 @@ class MTProtoService:
                                 break
 
                             if _is_account_banned_or_muted_error(e):
-                                logger.warning(f"[Broadcast] Account {phone_number} banned/muted in '{group_title}': {e}. Auto-leaving...")
-                                try:
-                                    await client.delete_dialog(group_entity)
-                                    logger.info(f"[AutoLeave] Account {phone_number} automatically left banned/muted group '{group_title}'")
-                                except Exception as leave_err:
-                                    logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+                                if getattr(settings, 'AUTO_REMOVE_BANNED_GROUPS', False):
+                                    logger.warning(f"[Broadcast] Account {phone_number} banned/muted in '{group_title}': {e}. Auto-leaving (Admin Enabled)...")
+                                    try:
+                                        await client.delete_dialog(group_entity)
+                                        logger.info(f"[AutoLeave] Account {phone_number} automatically left banned/muted group '{group_title}'")
+                                    except Exception as leave_err:
+                                        logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+                                    results.append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
+                                else:
+                                    logger.info(f"[Broadcast] Account {phone_number} banned/muted in '{group_title}': {e}. Auto-remove DISABLED by Admin — keeping group.")
+                                    results.append((group_title, False, f"Banned/Muted (Auto-Remove Disabled): {e}", None))
 
-                                results.append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
                                 sent = True
                                 consecutive_skips += 1
                                 break
@@ -738,15 +742,19 @@ class MTProtoService:
                                 break
 
                             if _is_account_banned_or_muted_error(e):
-                                logger.warning(f"[BroadcastStacked] Account {acc['phone_number']} banned/muted in '{group_title}': {e}. Auto-leaving...")
                                 self.mark_group_unwriteable(acc["phone_number"], g_key)
-                                try:
-                                    await client.delete_dialog(group_entity)
-                                    logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left banned/muted group '{group_title}'")
-                                except Exception as leave_err:
-                                    logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+                                if getattr(settings, 'AUTO_REMOVE_BANNED_GROUPS', False):
+                                    logger.warning(f"[BroadcastStacked] Account {acc['phone_number']} banned/muted in '{group_title}': {e}. Auto-leaving (Admin Enabled)...")
+                                    try:
+                                        await client.delete_dialog(group_entity)
+                                        logger.info(f"[AutoLeave] Account {acc['phone_number']} automatically left banned/muted group '{group_title}'")
+                                    except Exception as leave_err:
+                                        logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
+                                    results_by_account[acc_id].append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
+                                else:
+                                    logger.info(f"[BroadcastStacked] Account {acc['phone_number']} banned/muted in '{group_title}': {e}. Auto-remove DISABLED by Admin — keeping group.")
+                                    results_by_account[acc_id].append((group_title, False, f"Banned/Muted (Auto-Remove Disabled): {e}", None))
 
-                                results_by_account[acc_id].append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
                                 sent = True
                                 consecutive_failures[acc_id] += 1
                                 break

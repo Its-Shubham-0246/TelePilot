@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
+    # Auto-Remove Banned / Muted Groups Feature
+    # Control given to Admin: Only if enabled by Admin, auto-remove works. Default: False
+    AUTO_REMOVE_BANNED_GROUPS: bool = False
+    
     # Razorpay Payment Gateway Config
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""

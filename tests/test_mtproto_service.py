@@ -76,3 +76,38 @@ def test_paid_and_unwritable_error_helpers():
     assert _is_account_banned_or_muted_error(Exception("USER_BANNED_IN_CHANNEL")) is True
     assert _is_account_banned_or_muted_error(Exception("Account was MUTED by admin")) is True
     assert _is_account_banned_or_muted_error(ChatWriteForbiddenError(request=None)) is False
+
+
+@pytest.mark.asyncio
+async def test_auto_remove_banned_groups_admin_control():
+    from config import settings
+    from telethon.errors import UserBannedInChannelError
+
+    service = MTProtoService(api_id=12345, api_hash="fakehash")
+    phone = "+919876543210"
+
+    mock_client = AsyncMock()
+    mock_client.send_message.side_effect = UserBannedInChannelError(request=None)
+    mock_client.delete_dialog = AsyncMock()
+
+    mock_group = object()
+
+    with patch.object(service, '_get_active_client', AsyncMock(return_value=mock_client)), \
+         patch.object(service, 'fetch_joined_groups', AsyncMock(return_value=[(mock_group, "Test Group")])):
+
+        # Case 1: Admin AUTO_REMOVE_BANNED_GROUPS is False (default/disabled)
+        settings.AUTO_REMOVE_BANNED_GROUPS = False
+        res1 = await service.send_broadcast_messages("fakesession", phone, ["Hello"])
+        assert mock_client.delete_dialog.called is False
+        assert "Auto-Remove Disabled" in res1[0][2]
+
+        # Case 2: Admin AUTO_REMOVE_BANNED_GROUPS is True (enabled)
+        mock_client.delete_dialog.reset_mock()
+        settings.AUTO_REMOVE_BANNED_GROUPS = True
+        res2 = await service.send_broadcast_messages("fakesession", phone, ["Hello"])
+        assert mock_client.delete_dialog.called is True
+        assert "Auto-Left" in res2[0][2]
+
+    # Reset back to False
+    settings.AUTO_REMOVE_BANNED_GROUPS = False
+

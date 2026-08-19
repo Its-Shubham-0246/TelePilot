@@ -11,6 +11,7 @@ from bot.handlers.admin import (
     admin_grant_lifetime,
     admin_revoke_lifetime,
     admin_list_users,
+    admin_toggle_auto_remove,
     is_admin_user,
 )
 from config import settings
@@ -147,3 +148,27 @@ async def test_users_command_escapes_html():
     all_answers = "".join(call[0][0] for call in msg_mock.answer.call_args_list)
     assert "&lt;Jane &amp; John&gt;" in all_answers
     assert "&lt;script&gt;" in all_answers
+
+
+@pytest.mark.asyncio
+async def test_toggle_auto_remove():
+    await init_db()
+    admin_id = settings.admin_ids_list[0] if settings.admin_ids_list else 6436648042
+
+    msg_mock = AsyncMock()
+    msg_mock.from_user.id = admin_id
+
+    # Test toggle ON
+    msg_mock.text = "/autoremove on"
+    msg_mock.answer = AsyncMock()
+    await admin_toggle_auto_remove(msg_mock)
+    assert settings.AUTO_REMOVE_BANNED_GROUPS is True
+    assert "ENABLED" in msg_mock.answer.call_args[0][0]
+
+    # Test toggle OFF
+    msg_mock.text = "/autoremove off"
+    msg_mock.answer = AsyncMock()
+    await admin_toggle_auto_remove(msg_mock)
+    assert settings.AUTO_REMOVE_BANNED_GROUPS is False
+    assert "DISABLED" in msg_mock.answer.call_args[0][0]
+

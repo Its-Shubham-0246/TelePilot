@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from services.mtproto_service import MTProtoService, mtproto_service
 
 
@@ -87,27 +87,40 @@ async def test_auto_remove_banned_groups_admin_control():
     phone = "+919876543210"
 
     mock_client = AsyncMock()
+    mock_client.connect = AsyncMock()
+    mock_client.disconnect = AsyncMock()
+    mock_client.is_user_authorized = AsyncMock(return_value=True)
+
+    mock_dialog = MagicMock()
+    mock_dialog.is_group = True
+    mock_dialog.is_channel = False
+    mock_dialog.name = "Test Group"
+    mock_dialog.entity = object()
+    mock_dialog.id = 12345
+
+    async def mock_iter_dialogs():
+        yield mock_dialog
+
+    mock_client.iter_dialogs = mock_iter_dialogs
     mock_client.send_message.side_effect = UserBannedInChannelError(request=None)
     mock_client.delete_dialog = AsyncMock()
 
-    mock_group = object()
-
-    with patch.object(service, '_get_active_client', AsyncMock(return_value=mock_client)), \
-         patch.object(service, 'fetch_joined_groups', AsyncMock(return_value=[(mock_group, "Test Group")])):
-
+    with patch('services.mtproto_service.StringSession'), \
+         patch('services.mtproto_service.TelegramClient', return_value=mock_client):
         # Case 1: Admin AUTO_REMOVE_BANNED_GROUPS is False (default/disabled)
         settings.AUTO_REMOVE_BANNED_GROUPS = False
-        res1 = await service.send_broadcast_messages("fakesession", phone, ["Hello"])
+        res1 = await service.broadcast_to_account_groups("1fakesession", ["Hello"], phone_number=phone)
         assert mock_client.delete_dialog.called is False
         assert "Auto-Remove Disabled" in res1[0][2]
 
         # Case 2: Admin AUTO_REMOVE_BANNED_GROUPS is True (enabled)
         mock_client.delete_dialog.reset_mock()
         settings.AUTO_REMOVE_BANNED_GROUPS = True
-        res2 = await service.send_broadcast_messages("fakesession", phone, ["Hello"])
+        res2 = await service.broadcast_to_account_groups("1fakesession", ["Hello"], phone_number=phone)
         assert mock_client.delete_dialog.called is True
         assert "Auto-Left" in res2[0][2]
 
     # Reset back to False
     settings.AUTO_REMOVE_BANNED_GROUPS = False
+
 

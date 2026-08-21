@@ -8,27 +8,44 @@ class Base(DeclarativeBase):
     pass
 
 
-# SQLite / PostgreSQL async engine compatibility fallback
+# Normalize DATABASE_URL scheme for SQLAlchemy async drivers
+# Railway Postgres emits 'postgres://' or 'postgresql://' — asyncpg requires 'postgresql+asyncpg://'
 database_url = settings.DATABASE_URL
-# Railway PostgreSQL can emit either 'postgres://' or 'postgresql://'
-# SQLAlchemy async requires the 'postgresql+asyncpg://' scheme
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
 elif database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+IS_POSTGRES = "postgresql" in database_url
 
 engine_kwargs = {
     "echo": False,
     "future": True,
 }
-if "postgresql" in database_url:
+
+if IS_POSTGRES:
+    # Railway Postgres free/hobby plan allows 25 max connections.
+    # pool_size=10 + max_overflow=15 = 25 max total — stays within limit.
+    # pool_timeout: fail fast (30s) if all connections are busy instead of hanging forever.
+    # pool_recycle: recycle connections every 30 min to avoid stale connection errors.
+    # pool_pre_ping: issue a SELECT 1 before each checkout to detect dead connections.
     engine_kwargs.update({
-        "pool_size": 30,
-        "max_overflow": 60,
+        "pool_size": 10,
+        "max_overflow": 15,
+        "pool_timeout": 30,
         "pool_recycle": 1800,
         "pool_pre_ping": True,
+        "connect_args": {
+            "command_timeout": 60,  # asyncpg: cancel queries taking longer than 60s
+            "server_settings": {
+                "application_name": "telepilot",
+            },
+        },
     })
+else:
+    # SQLite: use NullPool so each async context gets its own connection (avoids thread-safety issues)
+    from sqlalchemy.pool import NullPool
+    engine_kwargs["poolclass"] = NullPool
 
 engine = create_async_engine(
     database_url,
@@ -57,18 +74,26 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Safe schema migration for new columns and indexes on existing database
+    # Safe schema migrations — each statement is run independently so a failure
+    # on one (e.g. column already exists) does not block the rest.
     from sqlalchemy import text
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Postgres uses BOOLEAN literals; SQLite uses 0/1 integers.
+    bool_false = "FALSE" if IS_POSTGRES else "0"
+    bool_true = "TRUE" if IS_POSTGRES else "1"
+
     migrations = [
         "ALTER TABLE users ADD COLUMN referrer_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
         "ALTER TABLE users ADD COLUMN ref_commission_rate FLOAT DEFAULT 0.30",
         "ALTER TABLE users ADD COLUMN referral_balance FLOAT DEFAULT 0.0",
         "ALTER TABLE users ADD COLUMN total_withdrawn FLOAT DEFAULT 0.0",
-        "ALTER TABLE telegram_accounts ADD COLUMN current_msg_index INTEGER DEFAULT 0",
-        "ALTER TABLE telegram_accounts ADD COLUMN auto_join_enabled BOOLEAN DEFAULT FALSE",
+        f"ALTER TABLE telegram_accounts ADD COLUMN current_msg_index INTEGER DEFAULT 0",
+        f"ALTER TABLE telegram_accounts ADD COLUMN auto_join_enabled BOOLEAN DEFAULT {bool_false}",
         "ALTER TABLE discovered_groups ADD COLUMN username VARCHAR(255)",
         "ALTER TABLE discovered_groups ADD COLUMN invite_link VARCHAR(500)",
-        "ALTER TABLE discovered_groups ADD COLUMN can_send_msgs BOOLEAN DEFAULT TRUE",
+        f"ALTER TABLE discovered_groups ADD COLUMN can_send_msgs BOOLEAN DEFAULT {bool_true}",
         "CREATE INDEX IF NOT EXISTS ix_job_logs_sent_at ON job_logs (sent_at)",
         "CREATE INDEX IF NOT EXISTS ix_job_logs_status ON job_logs (status)",
         "CREATE INDEX IF NOT EXISTS ix_job_logs_account_id ON job_logs (account_id)",
@@ -78,21 +103,12 @@ async def init_db():
         "CREATE INDEX IF NOT EXISTS ix_schedules_is_active ON schedules (is_active)",
         "CREATE INDEX IF NOT EXISTS ix_subscriptions_user_status_exp ON subscriptions (user_id, status, expires_at)",
     ]
-    import logging
-    logger = logging.getLogger(__name__)
 
     for m in migrations:
         try:
             async with engine.begin() as conn:
                 await conn.execute(text(m))
         except Exception as e:
-            # Try SQLite fallback if PostgreSQL syntax variant failed
-            if "DEFAULT FALSE" in m or "DEFAULT TRUE" in m:
-                try:
-                    fallback_m = m.replace("DEFAULT FALSE", "DEFAULT 0").replace("DEFAULT TRUE", "DEFAULT 1")
-                    async with engine.begin() as conn:
-                        await conn.execute(text(fallback_m))
-                except Exception:
-                    pass
-            logger.debug(f"[Migration] Statement '{m}' result: {e}")
+            # Expected on re-deploy: column already exists, index already exists — safe to ignore.
+            logger.debug(f"[Migration] Skipped (already applied or not applicable): {e}")
 

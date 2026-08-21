@@ -114,6 +114,7 @@ async def test_auto_remove_banned_groups_admin_control():
         assert "Auto-Remove Disabled" in res1[0][2]
 
         # Case 2: Admin AUTO_REMOVE_BANNED_GROUPS is True (enabled)
+        service._unwriteable_cache.clear()
         mock_client.delete_dialog.reset_mock()
         settings.AUTO_REMOVE_BANNED_GROUPS = True
         res2 = await service.broadcast_to_account_groups("1fakesession", ["Hello"], phone_number=phone)
@@ -122,5 +123,28 @@ async def test_auto_remove_banned_groups_admin_control():
 
     # Reset back to False
     settings.AUTO_REMOVE_BANNED_GROUPS = False
+
+
+@pytest.mark.asyncio
+async def test_unwriteable_cache_ttl_and_unmark():
+    service = MTProtoService(api_id=12345, api_hash="fakehash")
+    phone = "+919876543210"
+    group_key = "100200300"
+
+    # Initially not unwriteable
+    assert service.is_group_unwriteable(phone, group_key) is False
+
+    # Mark as unwriteable (with 30 min TTL)
+    service.mark_group_unwriteable(phone, group_key, ttl_seconds=1800)
+    assert service.is_group_unwriteable(phone, group_key) is True
+
+    # Unmark clears it immediately
+    service.unmark_group_unwriteable(phone, group_key)
+    assert service.is_group_unwriteable(phone, group_key) is False
+
+    # Mark with 0 second TTL (expired)
+    service.mark_group_unwriteable(phone, group_key, ttl_seconds=-10)
+    assert service.is_group_unwriteable(phone, group_key) is False
+
 
 

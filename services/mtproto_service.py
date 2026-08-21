@@ -159,7 +159,7 @@ class MTProtoService:
         self.api_hash = api_hash or settings.TELEGRAM_API_HASH
         self._account_locks: dict = {}
         self._slowmode_cache: dict = {}      # (phone_number, group_key) -> expire_datetime_utc
-        self._unwriteable_cache: set = set() # (phone_number, group_key)
+        self._unwriteable_cache: dict = {}   # (phone_number, group_key) -> expire_datetime_utc
         self._group_count_cache: dict = {}   # clean_phone -> (count, datetime)
 
     def _update_group_count_cache(self, phone_number: Optional[str], count: int):
@@ -198,10 +198,28 @@ class MTProtoService:
             self._slowmode_cache[cache_key] = datetime.utcnow() + timedelta(seconds=seconds)
 
     def is_group_unwriteable(self, phone_number: str, group_key: str) -> bool:
-        return (phone_number, str(group_key)) in self._unwriteable_cache
+        cache_key = (phone_number, str(group_key))
+        expire_time = self._unwriteable_cache.get(cache_key)
+        if expire_time:
+            if datetime.utcnow() < expire_time:
+                return True
+            else:
+                self._unwriteable_cache.pop(cache_key, None)
+        return False
 
-    def mark_group_unwriteable(self, phone_number: str, group_key: str):
-        self._unwriteable_cache.add((phone_number, str(group_key)))
+    def mark_group_unwriteable(self, phone_number: str, group_key: str, ttl_seconds: int = 1800):
+        """Caches unwriteable/restricted groups for a temporary window (default 30 mins) so they are periodically retried."""
+        if not phone_number:
+            return
+        cache_key = (phone_number, str(group_key))
+        self._unwriteable_cache[cache_key] = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+
+    def unmark_group_unwriteable(self, phone_number: str, group_key: str):
+        """Clears unwriteable entry when a send succeeds."""
+        if not phone_number:
+            return
+        cache_key = (phone_number, str(group_key))
+        self._unwriteable_cache.pop(cache_key, None)
 
     def get_account_lock(self, phone_number: Optional[str]) -> asyncio.Lock:
         """Returns a dedicated asyncio.Lock for the given phone number to ensure single-instance connection safety."""
@@ -211,12 +229,16 @@ class MTProtoService:
         return self._account_locks[clean]
 
     def cleanup_stale_caches(self):
-        """Purges expired slowmode entries, old group count cache (>2 hours), and unlocked account locks to prevent memory leaks at 10,000+ account scale."""
+        """Purges expired slowmode entries, unwriteable caches, old group count cache (>2 hours), and unlocked account locks to prevent memory leaks."""
         try:
             now = datetime.utcnow()
             expired_slowmode = [k for k, exp in self._slowmode_cache.items() if now >= exp]
             for k in expired_slowmode:
                 self._slowmode_cache.pop(k, None)
+
+            expired_unwriteable = [k for k, exp in self._unwriteable_cache.items() if now >= exp]
+            for k in expired_unwriteable:
+                self._unwriteable_cache.pop(k, None)
 
             cutoff_2h = now - timedelta(hours=2)
             expired_counts = [k for k, (_, ts) in self._group_count_cache.items() if ts < cutoff_2h]
@@ -227,7 +249,7 @@ class MTProtoService:
             for phone in unlocked_phones:
                 self._account_locks.pop(phone, None)
 
-            logger.debug(f"[MTProtoService] Memory cleanup: purged {len(expired_slowmode)} slowmode(s), {len(expired_counts)} group count(s), {len(unlocked_phones)} lock(s).")
+            logger.debug(f"[MTProtoService] Memory cleanup: purged {len(expired_slowmode)} slowmode(s), {len(expired_unwriteable)} unwriteable(s), {len(expired_counts)} group count(s), {len(unlocked_phones)} lock(s).")
         except Exception as e:
             logger.warning(f"[MTProtoService] Error cleaning stale caches: {e}")
 
@@ -480,6 +502,16 @@ class MTProtoService:
 
                 consecutive_skips = 0
                 for index, (group_entity, group_title) in enumerate(groups):
+                    group_key = str(getattr(group_entity, 'id', group_title))
+
+                    if phone_number and self.is_group_slowmode_active(phone_number, group_key):
+                        results.append((group_title, False, "SlowMode (active cache)", None))
+                        continue
+
+                    if phone_number and self.is_group_unwriteable(phone_number, group_key):
+                        results.append((group_title, False, "Unwriteable (cached)", None))
+                        continue
+
                     if index > 0:
                         # Human-like delay: 2.5s base + 0.5-2.0s jitter = ~3.0s-4.5s between groups
                         # Prevents Telegram anti-spam shadow-muting and keeps group post views & RPM high
@@ -508,6 +540,8 @@ class MTProtoService:
                                     await client.send_message(group_entity, message_text, link_preview=True)
 
                             results.append((group_title, True, f"Sent to {group_title}", None))
+                            if phone_number:
+                                self.unmark_group_unwriteable(phone_number, group_key)
                             sent = True
                             consecutive_skips = 0
                             break
@@ -521,6 +555,8 @@ class MTProtoService:
                         except SlowModeWaitError as e:
                             # Group slow mode — skip this group, try again next interval
                             logger.info(f"[Broadcast] SlowMode on '{group_title}': {e.seconds}s wait — skipping this cycle")
+                            if phone_number:
+                                self.set_group_slowmode(phone_number, group_key, e.seconds)
                             results.append((group_title, False, f"SlowMode: {e.seconds}s — will retry next interval", None))
                             sent = True  # Don't retry, move to next group
                             break
@@ -528,6 +564,8 @@ class MTProtoService:
                         except Exception as e:
                             err_str = str(e)
                             if _is_paid_group_error(err_str):
+                                if phone_number:
+                                    self.mark_group_unwriteable(phone_number, group_key)
                                 logger.info(f"[Broadcast] Skipped paid group '{group_title}' for {phone_number}: {err_str}")
                                 results.append((group_title, False, f"Paid Group (Skipped): {err_str}", None))
                                 sent = True
@@ -535,6 +573,8 @@ class MTProtoService:
                                 break
 
                             if _is_general_read_only_error(e):
+                                if phone_number:
+                                    self.mark_group_unwriteable(phone_number, group_key)
                                 logger.info(f"[Broadcast] Read-only group '{group_title}' for {phone_number} (Skipped, kept in group): {e}")
                                 results.append((group_title, False, f"Read-Only Group (Skipped): {e}", None))
                                 sent = True
@@ -546,11 +586,15 @@ class MTProtoService:
                                     logger.warning(f"[Broadcast] Account {phone_number} banned/muted in '{group_title}': {e}. Auto-leaving (Admin Enabled)...")
                                     try:
                                         await client.delete_dialog(group_entity)
+                                        if phone_number:
+                                            self.unmark_group_unwriteable(phone_number, group_key)
                                         logger.info(f"[AutoLeave] Account {phone_number} automatically left banned/muted group '{group_title}'")
                                     except Exception as leave_err:
                                         logger.debug(f"[AutoLeave] Failed to leave '{group_title}': {leave_err}")
                                     results.append((group_title, False, f"Auto-Left (Banned/Muted): {e}", None))
                                 else:
+                                    if phone_number:
+                                        self.mark_group_unwriteable(phone_number, group_key)
                                     logger.info(f"[Broadcast] Account {phone_number} banned/muted in '{group_title}': {e}. Auto-remove DISABLED by Admin — keeping group.")
                                     results.append((group_title, False, f"Banned/Muted (Auto-Remove Disabled): {e}", None))
 
@@ -560,6 +604,8 @@ class MTProtoService:
 
                             # Check for known permanent errors — retry is pointless
                             if any(kw in err_str for kw in _PERMANENT_ERROR_KEYWORDS):
+                                if phone_number:
+                                    self.mark_group_unwriteable(phone_number, group_key)
                                 logger.warning(f"[Broadcast] Permanent skip '{group_title}': {err_str}")
                                 results.append((group_title, False, f"Permanent: {err_str}", None))
                                 sent = True
@@ -574,10 +620,6 @@ class MTProtoService:
                                 logger.error(f"[Broadcast] Failed '{group_title}' after retry: {e}")
                                 results.append((group_title, False, f"Failed after retry: {err_str}", None))
                                 sent = True
-
-                    if consecutive_skips >= 10:
-                        logger.warning(f"[Broadcast] 10 consecutive non-writable groups for {phone_number} — early stopping broadcast cycle for efficiency.")
-                        break
 
                     if not sent:
                         results.append((group_title, False, "Unknown failure", None))
@@ -683,7 +725,7 @@ class MTProtoService:
 
                 for acc in active_accounts:
                     acc_id = acc["id"]
-                    if acc_id in flood_paused or consecutive_failures.get(acc_id, 0) >= 10:
+                    if acc_id in flood_paused:
                         continue
 
                     g_map = account_groups.get(acc_id, {})
@@ -727,6 +769,7 @@ class MTProtoService:
                                     await client.send_message(group_entity, message_text, link_preview=True)
 
                             results_by_account[acc_id].append((group_title, True, f"Sent to {group_title}", None))
+                            self.unmark_group_unwriteable(acc["phone_number"], g_key)
                             sent = True
                             consecutive_failures[acc_id] = 0
                             break

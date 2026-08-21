@@ -537,16 +537,29 @@ class MTProtoService:
 
                     for attempt in range(2):  # 1 initial attempt + 1 retry on transient errors
                         try:
+                            msg = None
                             if media_url:
                                 try:
-                                    await client.send_file(group_entity, media_url, caption=message_text, parse_mode='html')
+                                    msg = await client.send_file(group_entity, media_url, caption=message_text, parse_mode='html')
                                 except Exception:
-                                    await client.send_file(group_entity, media_url, caption=message_text)
+                                    msg = await client.send_file(group_entity, media_url, caption=message_text)
                             else:
                                 try:
-                                    await client.send_message(group_entity, message_text, parse_mode='html', link_preview=True)
+                                    # link_preview=False: avoids silent drops in groups with embed_links banned
+                                    msg = await client.send_message(group_entity, message_text, parse_mode='html', link_preview=False)
                                 except Exception:
-                                    await client.send_message(group_entity, message_text, link_preview=True)
+                                    msg = await client.send_message(group_entity, message_text, link_preview=False)
+
+                            # Detect silent drop: Telegram accepted the request but returned MessageEmpty
+                            # (pts_count=0). Telethon logs 'missing message mapping' and returns None.
+                            if msg is None:
+                                logger.warning(f"[Broadcast] Silent drop on '{group_title}' for {phone_number} — Telegram returned MessageEmpty (embed_links or send restriction). Caching 15min.")
+                                if phone_number:
+                                    self.mark_group_unwriteable(phone_number, group_key, ttl_seconds=900)
+                                results.append((group_title, False, "Silent drop: message not delivered (embed_links/send restriction)", None))
+                                sent = True
+                                consecutive_skips += 1
+                                break
 
                             results.append((group_title, True, f"Sent to {group_title}", None))
                             if phone_number:
@@ -776,16 +789,27 @@ class MTProtoService:
 
                     for attempt in range(2):
                         try:
+                            msg = None
                             if media_url:
                                 try:
-                                    await client.send_file(group_entity, media_url, caption=message_text, parse_mode='html')
+                                    msg = await client.send_file(group_entity, media_url, caption=message_text, parse_mode='html')
                                 except Exception:
-                                    await client.send_file(group_entity, media_url, caption=message_text)
+                                    msg = await client.send_file(group_entity, media_url, caption=message_text)
                             else:
                                 try:
-                                    await client.send_message(group_entity, message_text, parse_mode='html', link_preview=True)
+                                    # link_preview=False: avoids silent drops in groups with embed_links banned
+                                    msg = await client.send_message(group_entity, message_text, parse_mode='html', link_preview=False)
                                 except Exception:
-                                    await client.send_message(group_entity, message_text, link_preview=True)
+                                    msg = await client.send_message(group_entity, message_text, link_preview=False)
+
+                            # Detect silent drop: Telegram returned MessageEmpty (pts_count=0)
+                            if msg is None:
+                                logger.warning(f"[BroadcastStacked] Silent drop on '{group_title}' for {acc['phone_number']} — Telegram returned MessageEmpty. Caching 15min.")
+                                self.mark_group_unwriteable(acc["phone_number"], g_key, ttl_seconds=900)
+                                results_by_account[acc_id].append((group_title, False, "Silent drop: message not delivered (embed_links/send restriction)", None))
+                                sent = True
+                                consecutive_failures[acc_id] += 1
+                                break
 
                             results_by_account[acc_id].append((group_title, True, f"Sent to {group_title}", None))
                             self.unmark_group_unwriteable(acc["phone_number"], g_key)

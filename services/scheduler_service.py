@@ -247,8 +247,9 @@ class SchedulerService:
             shared_seq_idx = ready_acc_data[0]["account"].current_msg_index or 0
             for item in ready_acc_data:
                 item["seq_index"] = shared_seq_idx
-                item["account"].last_used_at = now
-            await db.commit()
+            # NOTE: last_used_at is NOT committed here — it is only set per-account
+            # after results confirm the account actually attempted sending groups.
+            # Pre-committing causes the interval timer to reset even on connection failures.
 
             logger.info(f"[Scheduler] Executing STACKED in-group broadcast for {len(ready_acc_data)} accounts of user #{schedule.user_id} (shared_seq_idx={shared_seq_idx})")
 
@@ -268,15 +269,23 @@ class SchedulerService:
                 sent_count = 0
                 failed_count = 0
                 logs_batch = []
+                had_real_attempt = False  # True if account got past connect phase and touched groups
+
                 for group_title, success, log_msg, flood_seconds in acc_results:
                     if log_msg == "DUAL_IP_CONFLICT":
-                        continue
+                        # Transient conflict — do NOT reset last_used_at so retry happens soon
+                        logger.warning(f"[Scheduler] Dual IP conflict for {acc.phone_number} — skipping interval reset")
+                        break
                     if log_msg == "SESSION_REVOKED":
                         acc.status = "SESSION_REVOKED"
                         acc.is_active = False
+                        had_real_attempt = True
                         if user_telegram_id:
                             await _notify_user(user_telegram_id, f"⚠️ <b>Session Logged Out:</b> Session for <code>{acc.phone_number}</code> was logged out on Telegram.")
                         break
+
+                    # Any other result means the account connected and is actively broadcasting
+                    had_real_attempt = True
 
                     job_log = JobLog(
                         schedule_id=schedule.id,
@@ -297,6 +306,10 @@ class SchedulerService:
                         acc.rate_limit_until = now + timedelta(seconds=flood_seconds)
                         break
 
+                # Only stamp last_used_at if the account actually tried sending groups
+                if had_real_attempt:
+                    acc.last_used_at = now
+
                 if logs_batch:
                     db.add_all(logs_batch)
                 await db.commit()
@@ -311,155 +324,187 @@ class SchedulerService:
         await asyncio.gather(*account_tasks, return_exceptions=True)
 
     async def _process_single_account(self, account_id: int, schedule_id: int, user_telegram_id: Optional[int]):
-        """Processes a single account broadcast with concurrency semaphore, isolated session and staggered startup safety."""
+        """Processes a single account broadcast with concurrency semaphore, isolated session and staggered startup safety.
+
+        Uses TWO short-lived DB sessions to avoid holding the database lock for the entire broadcast duration:
+        - Session 1: Read account data, validate, stamp last_used_at, then release.
+        - Broadcast: Runs with NO DB session open (prevents SQLite lock contention across concurrent accounts).
+        - Session 2: Write job logs and update account status after broadcast completes.
+        """
         async with self.account_semaphore:
-            async with async_session_factory() as db:
-                account = await db.get(TelegramAccount, account_id)
-                if not account or not account.is_active or not account.auto_group_enabled or account.status not in ("ACTIVE", "FLOOD_WAIT"):
-                    return
 
-                now = datetime.utcnow()
-
-                # Auto-reset FLOOD_WAIT if the wait period has passed
-                if account.status == "FLOOD_WAIT":
-                    if account.rate_limit_until and now >= account.rate_limit_until:
-                        logger.info(f"[Scheduler] FloodWait cleared for {account.phone_number}. Resuming active status.")
-                        account.status = "ACTIVE"
-                        account.rate_limit_until = None
-                        await db.commit()
-                    else:
-                        wait_left_secs = int((account.rate_limit_until - now).total_seconds()) if account.rate_limit_until else 60
-                        wait_left_mins = round(max(wait_left_secs, 1) / 60.0, 1)
-                        logger.info(f"[Scheduler] {account.phone_number} FloodWait active ({wait_left_mins}m remaining) — waiting automatically.")
+            # ── Session 1: Pre-flight checks + stamp last_used_at ─────────────────────────
+            phone_number = None
+            session_str = None
+            variants = []
+            seq_idx = 0
+            try:
+                async with async_session_factory() as db:
+                    account = await db.get(TelegramAccount, account_id)
+                    if not account or not account.is_active or not account.auto_group_enabled or account.status not in ("ACTIVE", "FLOOD_WAIT"):
                         return
 
+                    now = datetime.utcnow()
+                    phone_number = account.phone_number
 
-                # Check interval timer (strict check: full interval_minutes * 60 seconds required)
-                if account.last_used_at:
-                    seconds_since_last = (now - account.last_used_at).total_seconds()
-                    required_seconds = account.interval_minutes * 60.0
-                    if seconds_since_last < required_seconds:
-                        remaining_mins = round((required_seconds - seconds_since_last) / 60.0, 1)
-                        logger.info(f"[Scheduler] {account.phone_number} — {remaining_mins}m until next send")
+                    # Auto-reset FLOOD_WAIT if the wait period has passed
+                    if account.status == "FLOOD_WAIT":
+                        if account.rate_limit_until and now >= account.rate_limit_until:
+                            logger.info(f"[Scheduler] FloodWait cleared for {account.phone_number}. Resuming active status.")
+                            account.status = "ACTIVE"
+                            account.rate_limit_until = None
+                            await db.commit()
+                        else:
+                            wait_left_secs = int((account.rate_limit_until - now).total_seconds()) if account.rate_limit_until else 60
+                            wait_left_mins = round(max(wait_left_secs, 1) / 60.0, 1)
+                            logger.info(f"[Scheduler] {account.phone_number} FloodWait active ({wait_left_mins}m remaining) — waiting automatically.")
+                            return
+
+                    # Check interval timer
+                    if account.last_used_at:
+                        seconds_since_last = (now - account.last_used_at).total_seconds()
+                        required_seconds = account.interval_minutes * 60.0
+                        if seconds_since_last < required_seconds:
+                            remaining_mins = round((required_seconds - seconds_since_last) / 60.0, 1)
+                            logger.info(f"[Scheduler] {account.phone_number} — {remaining_mins}m until next send")
+                            return
+
+                    # Check message is configured
+                    message_text = account.custom_message
+                    if not message_text:
+                        logger.info(f"[Scheduler] {account.phone_number} — no message set, skipping silently")
                         return
 
-                # Check message is configured
-                message_text = account.custom_message
-                if not message_text:
-                    logger.info(f"[Scheduler] {account.phone_number} — no message set, skipping silently")
-                    return
+                    # Decrypt session
+                    try:
+                        session_str = account.get_session_string()
+                    except Exception as decrypt_err:
+                        logger.error(f"[Scheduler] {account.phone_number} — decrypt error: {decrypt_err}")
+                        session_str = ""
 
-                # Decrypt session
-                try:
-                    session_str = account.get_session_string()
-                except Exception as decrypt_err:
-                    logger.error(f"[Scheduler] {account.phone_number} — decrypt error: {decrypt_err}")
-                    session_str = ""
-
-                if not session_str:
-                    logger.error(f"[Scheduler] {account.phone_number} — session invalid or expired.")
-                    account.is_active = False
-                    account.status = "SESSION_EXPIRED"
-                    await db.commit()
-                    if user_telegram_id:
-                        await _notify_user(
-                            user_telegram_id,
-                            f"🔴 <b>Account Action Required:</b> Session for <code>{account.phone_number}</code> requires re-authentication. Tap <b>👤 My Accounts</b> to reconnect."
-                        )
-                    return
-
-                # Mark last_used_at NOW so interval counts from trigger time
-                account.last_used_at = now
-                await db.commit()
-
-                # Safety: Add a small random start delay (0 to 1.5s) to stagger concurrent account start times
-                import random
-                stagger = random.uniform(0.0, 1.5)
-                await asyncio.sleep(stagger)
-
-                logger.info(f"[Scheduler] Broadcasting in parallel for {account.phone_number} (interval={account.interval_minutes}m, stagger={stagger:.2f}s)")
-
-                # Run single-connection broadcast to all joined groups
-                variants = [v.strip() for v in message_text.split("---") if v.strip()] or [message_text]
-                seq_idx = account.current_msg_index or 0
-
-                try:
-                    broadcast_results = await mtproto_service.broadcast_to_account_groups(
-                        session_str=session_str,
-                        message_variants=variants,
-                        phone_number=account.phone_number,
-                        seq_index=seq_idx
-                    )
-                except Exception as broadcast_err:
-                    logger.error(f"[Scheduler] broadcast failed for {account.phone_number}: {broadcast_err}")
-                    return
-
-                if len(variants) > 1:
-                    account.current_msg_index = (seq_idx + 1) % len(variants)
-                    await db.commit()
-
-                if not broadcast_results:
-                    logger.info(f"[Scheduler] {account.phone_number} — no groups found or session unauthorized")
-                    return
-
-                # Log results and handle flood wait / session revocation
-                sent_count = 0
-                failed_count = 0
-                session_revoked = False
-                for group_title, success, log_msg, flood_seconds in broadcast_results:
-                    if log_msg == "DUAL_IP_CONFLICT":
-                        logger.warning(f"[Scheduler] Dual IP connection conflict for {account.phone_number} — skipping cycle without deleting account.")
-                        break
-
-                    if log_msg == "SESSION_REVOKED":
-                        logger.info(f"[Scheduler] Session revoked on Telegram app for {account.phone_number} — setting status to SESSION_REVOKED.")
-                        account.status = "SESSION_REVOKED"
+                    if not session_str:
+                        logger.error(f"[Scheduler] {account.phone_number} — session invalid or expired.")
                         account.is_active = False
+                        account.status = "SESSION_EXPIRED"
                         await db.commit()
-                        session_revoked = True
                         if user_telegram_id:
                             await _notify_user(
                                 user_telegram_id,
-                                f"⚠️ <b>Session Logged Out:</b> Session for <code>{account.phone_number}</code> was logged out on Telegram. Tap <b>➕ Add Account</b> to reconnect anytime."
+                                f"🔴 <b>Account Action Required:</b> Session for <code>{account.phone_number}</code> requires re-authentication. Tap <b>👤 My Accounts</b> to reconnect."
                             )
-                        break
+                        return
 
+                    variants = [v.strip() for v in message_text.split("---") if v.strip()] or [message_text]
+                    seq_idx = account.current_msg_index or 0
 
+                    # Stamp last_used_at NOW so concurrent check in next tick sees this account as busy
+                    account.last_used_at = now
+                    await db.commit()
+                    # ── DB session released here — broadcast runs with no lock held ──
 
-                    job_log = JobLog(
-                        schedule_id=schedule_id,
-                        account_id=account.id,
-                        target_chat=group_title,
-                        status="SUCCESS" if success else "FAILED",
-                        sent_at=datetime.utcnow(),
-                        error_details=None if success else log_msg
-                    )
-                    db.add(job_log)
-                    if success:
-                        sent_count += 1
-                    else:
-                        failed_count += 1
+            except Exception as pre_err:
+                logger.error(f"[Scheduler] Pre-flight DB error for account #{account_id}: {pre_err}", exc_info=True)
+                return
 
-                    if flood_seconds:
-                        account.status = "FLOOD_WAIT"
-                        account.rate_limit_until = datetime.utcnow() + timedelta(seconds=flood_seconds)
-                        logger.warning(f"[Scheduler] {account.phone_number} FloodWait {flood_seconds}s (silent background pause)")
-                        break
+            if not session_str:
+                return
 
+            # Safety: small random stagger to prevent concurrent sends racing on same DC
+            stagger = random.uniform(0.0, 1.5)
+            await asyncio.sleep(stagger)
 
-                await db.commit()
-                if not session_revoked:
-                    logger.info(f"[Scheduler] {account.phone_number} — sent={sent_count} failed={failed_count}")
+            logger.info(f"[Scheduler] Broadcasting in parallel for {phone_number} (stagger={stagger:.2f}s)")
 
-                    try:
-                        asyncio.create_task(
-                            check_and_alert_new_groups(
-                                discovering_phone=account.phone_number,
-                                session_str=session_str,
-                            )
+            # ── Broadcast: runs with NO open DB session ────────────────────────────────────
+            try:
+                broadcast_results = await mtproto_service.broadcast_to_account_groups(
+                    session_str=session_str,
+                    message_variants=variants,
+                    phone_number=phone_number,
+                    seq_index=seq_idx
+                )
+            except Exception as broadcast_err:
+                logger.error(f"[Scheduler] broadcast failed for {phone_number}: {broadcast_err}")
+                return
+
+            # ── Session 2: Write job logs + update status ──────────────────────────────────
+            try:
+                async with async_session_factory() as db:
+                    account = await db.get(TelegramAccount, account_id)
+                    if not account:
+                        return
+
+                    now_post = datetime.utcnow()
+
+                    if len(variants) > 1:
+                        account.current_msg_index = (seq_idx + 1) % len(variants)
+                        await db.commit()
+
+                    if not broadcast_results:
+                        logger.info(f"[Scheduler] {phone_number} — no groups found or session unauthorized")
+                        return
+
+                    sent_count = 0
+                    failed_count = 0
+                    session_revoked = False
+
+                    for group_title, success, log_msg, flood_seconds in broadcast_results:
+                        if log_msg == "DUAL_IP_CONFLICT":
+                            logger.warning(f"[Scheduler] Dual IP connection conflict for {phone_number} — skipping cycle without deleting account.")
+                            # Reset last_used_at so account is eligible immediately next cycle
+                            account.last_used_at = None
+                            await db.commit()
+                            break
+
+                        if log_msg == "SESSION_REVOKED":
+                            logger.info(f"[Scheduler] Session revoked on Telegram app for {phone_number} — setting status to SESSION_REVOKED.")
+                            account.status = "SESSION_REVOKED"
+                            account.is_active = False
+                            await db.commit()
+                            session_revoked = True
+                            if user_telegram_id:
+                                await _notify_user(
+                                    user_telegram_id,
+                                    f"⚠️ <b>Session Logged Out:</b> Session for <code>{phone_number}</code> was logged out on Telegram. Tap <b>➕ Add Account</b> to reconnect anytime."
+                                )
+                            break
+
+                        job_log = JobLog(
+                            schedule_id=schedule_id,
+                            account_id=account_id,
+                            target_chat=group_title,
+                            status="SUCCESS" if success else "FAILED",
+                            sent_at=now_post,
+                            error_details=None if success else log_msg
                         )
-                    except Exception as disc_err:
-                        logger.debug(f"[GroupAlert] Could not schedule discovery task: {disc_err}")
+                        db.add(job_log)
+                        if success:
+                            sent_count += 1
+                        else:
+                            failed_count += 1
+
+                        if flood_seconds:
+                            account.status = "FLOOD_WAIT"
+                            account.rate_limit_until = now_post + timedelta(seconds=flood_seconds)
+                            logger.warning(f"[Scheduler] {phone_number} FloodWait {flood_seconds}s (silent background pause)")
+                            break
+
+                    await db.commit()
+                    if not session_revoked:
+                        logger.info(f"[Scheduler] {phone_number} — sent={sent_count} failed={failed_count}")
+
+                        try:
+                            asyncio.create_task(
+                                check_and_alert_new_groups(
+                                    discovering_phone=phone_number,
+                                    session_str=session_str,
+                                )
+                            )
+                        except Exception as disc_err:
+                            logger.debug(f"[GroupAlert] Could not schedule discovery task: {disc_err}")
+
+            except Exception as post_err:
+                logger.error(f"[Scheduler] Post-broadcast DB write error for {phone_number}: {post_err}", exc_info=True)
 
 
 scheduler_service = SchedulerService()

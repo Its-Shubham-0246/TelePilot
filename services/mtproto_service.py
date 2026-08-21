@@ -43,22 +43,21 @@ _PAID_GROUP_KEYWORDS = (
     'BUY_SUBSCRIPTION',
 )
 
-# Permanent error keywords — these should never be retried (no amount of waiting will fix them)
+# Permanent error keywords — errors that will NEVER resolve on retry regardless of time.
+# NOTE: CHAT_WRITE_FORBIDDEN and PLAIN_FORBIDDEN are intentionally excluded here —
+# they are handled by _is_general_read_only_error() with a 30-min TTL so groups are retried.
 _PERMANENT_ERROR_KEYWORDS = (
-    'PAYMENT_REQUIRED',          # Group requires Telegram Premium/paid subscription
-    'TOPIC_CLOSED',              # Forum topic is closed by admin
-    'INVITE_REQUEST_SENT',       # Needs admin approval to join
-    'PEER_FLOOD',                # Account is flagged for spamming (account-level)
-    'CHAT_RESTRICTED',           # Account is geo-blocked or restricted from this specific chat
-    'chat is restricted',        # Chat is restricted by Telegram/admin
+    'PAYMENT_REQUIRED',          # Group requires Telegram Stars/paid subscription — permanent
+    'TOPIC_CLOSED',              # Forum topic is closed by admin — permanent until admin reopens
+    'INVITE_REQUEST_SENT',       # Needs admin approval to join — permanent until approved
+    'PEER_FLOOD',                # Account flagged for spamming (account-level ban) — permanent
+    'CHAT_RESTRICTED',           # Account geo-blocked or restricted from this chat — permanent
+    'chat is restricted',        # Chat restricted by Telegram — permanent
     'restricted and cannot be used',
-    'CHAT_WRITE_FORBIDDEN',      # An alias for write-forbidden caught as generic exception
-    'CHAT_SEND_PLAIN_FORBIDDEN', # Group forbids sending plain text messages without media
-    'PLAIN_FORBIDDEN',
-    'PEER_ID_INVALID',           # Invalid peer type or bot cannot start conversation
-    'invalid Peer',              # Invalid peer message
-    'USER_IS_BLOCKED',
-    'INPUT_USER_DEACTIVATED',
+    'PEER_ID_INVALID',           # Invalid peer type — permanent
+    'invalid Peer',              # Invalid peer message — permanent
+    'USER_IS_BLOCKED',           # User blocked the account — permanent
+    'INPUT_USER_DEACTIVATED',    # Deactivated user — permanent
 )
 
 
@@ -488,9 +487,19 @@ class MTProtoService:
                     return [("All Groups", False, "Session expired or user unauthorized.", None)]
 
                 groups = []
-                async for dialog in client.iter_dialogs():
-                    if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
-                        groups.append((dialog.entity, dialog.name or str(dialog.id)))
+                try:
+                    async def _collect_groups():
+                        collected = []
+                        async for dialog in client.iter_dialogs():
+                            if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
+                                collected.append((dialog.entity, dialog.name or str(dialog.id)))
+                        return collected
+
+                    groups = await asyncio.wait_for(_collect_groups(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[Broadcast] iter_dialogs timed out for {phone_number} — using {len(groups)} dialogs collected so far")
+                except Exception as dial_err:
+                    logger.warning(f"[Broadcast] iter_dialogs error for {phone_number}: {dial_err}")
 
                 self._update_group_count_cache(phone_number, len(groups))
 
@@ -667,16 +676,25 @@ class MTProtoService:
             async def connect_acc(acc):
                 session = StringSession(acc["session_str"])
                 client = self._create_client(session, acc["phone_number"])
+                groups = {}
                 try:
                     await client.connect()
                     if not await client.is_user_authorized():
                         return acc["id"], client, None, "SESSION_REVOKED"
 
-                    groups = {}
-                    async for dialog in client.iter_dialogs():
-                        if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
-                            group_key = str(getattr(dialog.entity, 'id', dialog.id))
-                            groups[group_key] = (dialog.entity, dialog.name or str(dialog.id))
+                    async def _collect_groups_stacked():
+                        collected = {}
+                        async for dialog in client.iter_dialogs():
+                            if dialog.is_group or (dialog.is_channel and not getattr(dialog.entity, 'broadcast', False)):
+                                group_key = str(getattr(dialog.entity, 'id', dialog.id))
+                                collected[group_key] = (dialog.entity, dialog.name or str(dialog.id))
+                        return collected
+
+                    try:
+                        groups = await asyncio.wait_for(_collect_groups_stacked(), timeout=60.0)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[BroadcastStacked] iter_dialogs timed out for {acc['phone_number']} — using {len(groups)} dialogs collected so far")
+
                     self._update_group_count_cache(acc["phone_number"], len(groups))
                     return acc["id"], client, groups, None
                 except (UserDeactivatedError, AuthKeyInvalidError):
@@ -684,6 +702,7 @@ class MTProtoService:
                 except AuthKeyDuplicatedError:
                     return acc["id"], client, None, "DUAL_IP_CONFLICT"
                 except Exception as e:
+                    logger.warning(f"[BroadcastStacked] Connection error for {acc['phone_number']}: {type(e).__name__}: {e}")
                     return acc["id"], client, None, str(e)
 
             connect_tasks = [connect_acc(acc) for acc in accounts_data]
